@@ -202,3 +202,34 @@ Phase 5: Memory system + analytics
 - Anthropic: 200_000 tokens, compact at 75% = 150_000
 - Ollama: read ollama_context_window setting (default 8192), compact at 75%
 - Token counts from Ollama: prompt_eval_count (input) + eval_count (output)
+
+### Skills architecture
+
+- Skills live in backend/opvs/skills/ — one file per platform
+- WorkspaceSkill is always enabled (no DB row needed)
+- All other skills: enabled in project_skills table AND require API key configured
+- Read tools: requires_approval=False — execute silently, emit WS_TOOL_USED
+- Write tools: requires_approval=True — emit WS_TOOL_APPROVAL_REQUIRED, await asyncio.Event
+- Approval waits indefinitely — no timeout
+- Path traversal prevention: WorkspaceSkill.\_resolve_safe() returns None for ../
+
+### Agentic loop
+
+- Max 10 iterations (MAX_LOOP_ITERATIONS = 10)
+- Tool exchange messages NOT persisted to DB — only final text response saved
+- Stop conditions: stop_reason == "end_turn" OR no tool_results in current iteration
+- Approval state: module-level \_pending_approvals dict + \_approval_decisions dict
+- resolve_approval() called by approve/reject endpoints — sets asyncio.Event
+
+### Linear API
+
+- Authentication: direct key, no Bearer prefix
+- All queries via POST https://api.linear.app/graphql
+- Read tools: teams, projects, issues (with filters), get_issue, search_issues
+- Write tools: create_issue, update_issue, create_comment (all require approval)
+
+### Ollama tool use
+
+- Uses /v1/chat/completions endpoint (OpenAI-compatible) for tool support
+- /api/chat does not reliably support tool_calls across all models
+- Tool format converted from Anthropic schema to OpenAI function format
