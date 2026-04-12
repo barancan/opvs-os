@@ -95,30 +95,90 @@ async def _get_stm_path(db: AsyncSession, project_id: int | None) -> "Path":
     return workspace_path / "_memory" / "stm" / "current.md"
 
 
+async def _get_project_for_prompt(
+    db: AsyncSession, project_id: int
+) -> "tuple[str, str] | None":
+    """Return (name, slug) for a project, or None if not found. Avoids circular imports."""
+    from sqlalchemy import select as sa_select
+
+    from opvs.models.project import Project
+
+    result = await db.execute(sa_select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if project is None:
+        return None
+    return (project.name, project.slug)
+
+
 async def _build_system_prompt(db: AsyncSession, project_id: int | None = None) -> str:
-    parts = [_STATIC_PREAMBLE]
+    workspace_path = await _get_workspace_path(db)
+    sections: list[str] = [_STATIC_PREAMBLE]
 
-    stm_file = await _get_stm_path(db, project_id)
-    if stm_file.exists():
-        stm_content = stm_file.read_text(encoding="utf-8")
-        parts.append(f"\n\n## Short-term memory\n\n{stm_content}")
+    # 1. Global memory index — orients the orchestrator to what cross-project memory exists
+    global_index = workspace_path / "_memory" / "INDEX.md"
+    if global_index.exists():
+        content = global_index.read_text(encoding="utf-8").strip()
+        sections.append(f"## Global memory index\n\n{content}")
 
+    # 2. Project-scoped context and memory
+    if project_id is not None:
+        project_info = await _get_project_for_prompt(db, project_id)
+        if project_info is not None:
+            project_name, project_slug = project_info
+            sections.append(
+                f"## Active project\n\nName: {project_name}\nSlug: {project_slug}"
+            )
+
+            # Project CONTEXT.md — agent instructions for this project
+            context_file = workspace_path / "projects" / project_slug / "CONTEXT.md"
+            if context_file.exists():
+                raw = context_file.read_text(encoding="utf-8").strip()
+                # Strip the READ-ONLY header line before injecting
+                body = "\n".join(
+                    line for line in raw.splitlines()
+                    if not line.startswith("# READ-ONLY")
+                ).strip()
+                if body:
+                    sections.append(f"## Project context\n\n{body}")
+
+            # Project memory index
+            project_index = (
+                workspace_path / "projects" / project_slug / "_memory" / "INDEX.md"
+            )
+            if project_index.exists():
+                content = project_index.read_text(encoding="utf-8").strip()
+                sections.append(f"## Project memory index\n\n{content}")
+
+            # Project STM (most recent compact summary)
+            stm_file = await _get_stm_path(db, project_id)
+            if stm_file.exists():
+                content = stm_file.read_text(encoding="utf-8").strip()
+                if "No context has been compacted yet" not in content:
+                    sections.append(f"## Short-term memory\n\n{content}")
+
+    # 3. Dynamic system state
     from opvs.services import killswitch_service
 
     ks_status = await killswitch_service.get_status(db)
     kill_switch_str = "ACTIVE — do not accept new task requests" if ks_status.active else "inactive"
-    parts.append(f"\n\n## System state\n\n- Kill switch: {kill_switch_str}")
 
     from opvs.models.notification import NotificationStatus
     from opvs.services import notification_service
 
-    pending = await notification_service.list_notifications(db, status=NotificationStatus.PENDING)
-    parts.append(f"- Pending notifications: {len(pending)}")
-
+    pending = await notification_service.list_notifications(
+        db, status=NotificationStatus.PENDING, project_id=project_id
+    )
     model = await _get_model(db)
-    parts.append(f"- Orchestrator model: {model}")
 
-    return "".join(parts)
+    sections.append(
+        f"## System state\n\n"
+        f"- Kill switch: {kill_switch_str}\n"
+        f"- Pending notifications: {len(pending)}\n"
+        f"- Orchestrator model: {model}\n"
+        f"- Active project ID: {project_id}\n"
+    )
+
+    return "\n\n---\n\n".join(sections)
 
 
 async def _load_context_messages(

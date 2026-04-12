@@ -25,7 +25,32 @@ and only with user approval.
 4. Files with `# READ-ONLY` in their first line must never be modified by any agent.
 5. Agents may not traverse `../` outside the workspace root.
 
-## For Obsidian users
+## Memory architecture (two-tier)
 
-Point Obsidian at `workspace/_memory/` as a vault to view long-term memory as a graph.
-All wiki links use standard `[[note-name]]` syntax. Do not change this format.
+### Global memory — `workspace/_memory/`
+Cross-project knowledge: people, domain concepts, org context.
+Point Obsidian vault at `workspace/` root to see the full graph including
+cross-links between global and project memory.
+
+| Directory | Contents |
+|-----------|---------|
+| `_memory/people/` | Stakeholders, team members, contacts |
+| `_memory/concepts/` | Domain knowledge, frameworks, definitions |
+| `_memory/inbox/` | Global unreviewed captures |
+
+### Project memory — `workspace/projects/{slug}/_memory/`
+Project-specific knowledge. Each project has its own wiki.
+
+| Directory | Contents |
+|-----------|---------|
+| `stm/current.md` | Latest compact context summary (auto-written) |
+| `inbox/` | Unreviewed orchestrator captures for this project |
+| `decisions/` | Date-stamped decision records |
+| `research/` | Research outputs and findings |
+| `sessions/` | Completed agent session summaries |
+| `INDEX.md` | Entry point — promote inbox items and add links here |
+
+### Obsidian setup
+- Vault root: `workspace/` (not `workspace/_memory/`)
+- Wikilinks cross freely between global and project memory
+- Do not change link format — `[[note-name]]` only
