@@ -65,6 +65,16 @@ async def test_connection_test_unknown_service(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_connection_test_anthropic_no_key(client: AsyncClient) -> None:
+    # No key saved → expect graceful error, not an exception
+    response = await client.post("/api/settings/test/anthropic")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert "No API key saved" in data["error"]
+
+
+@pytest.mark.asyncio
 async def test_health_check(client: AsyncClient) -> None:
     response = await client.get("/api/health")
     assert response.status_code == 200

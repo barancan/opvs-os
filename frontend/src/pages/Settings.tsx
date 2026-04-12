@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import type { ConnectionTestResult } from '@/types/api'
+import { useAppStore } from '@/stores/useAppStore'
 import { ApiError } from '@/api/client'
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,8 @@ interface SecretKeyRowProps {
 function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowProps) {
   const qc = useQueryClient()
   const [inputValue, setInputValue] = useState('')
-  const [connResult, setConnResult] = useState<ConnectionTestResult | null>(null)
+  const connectionStatuses = useAppStore((s) => s.connectionStatuses)
+  const setConnectionStatus = useAppStore((s) => s.setConnectionStatus)
 
   // Check if key exists (to show placeholder hint)
   const { data: existing } = useQuery({
@@ -106,7 +107,7 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['setting', settingKey] })
       setInputValue('')
-      setConnResult(null)
+      setConnectionStatus(service, { status: 'untested' })
       toast.success('Saved')
     },
     onError: (err) => {
@@ -117,14 +118,20 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
   const testMutation = useMutation({
     mutationFn: () => testConnection(service),
     onSuccess: (result) => {
-      setConnResult(result)
+      setConnectionStatus(service, {
+        status: result.ok ? 'ok' : 'error',
+        error: result.error ?? undefined,
+      })
     },
     onError: (err) => {
-      setConnResult({ ok: false, error: err instanceof Error ? err.message : String(err) })
+      setConnectionStatus(service, {
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      })
     },
   })
 
-  const badgeStatus = connResult === null ? 'untested' : connResult.ok ? 'ok' : 'error'
+  const connState = connectionStatuses[service] ?? { status: 'untested' as const }
 
   return (
     <div className="space-y-3">
@@ -159,10 +166,7 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
           {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Test Connection
         </Button>
-        <ConnectionBadge
-          status={badgeStatus}
-          error={connResult?.error}
-        />
+        <ConnectionBadge status={connState.status} error={connState.error} />
       </div>
     </div>
   )
@@ -175,7 +179,8 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
 function OllamaRow() {
   const qc = useQueryClient()
   const [value, setValue] = useState('')
-  const [connResult, setConnResult] = useState<ConnectionTestResult | null>(null)
+  const connectionStatuses = useAppStore((s) => s.connectionStatuses)
+  const setConnectionStatus = useAppStore((s) => s.setConnectionStatus)
 
   const { data } = useQuery({
     queryKey: ['setting', 'ollama_host'],
@@ -206,13 +211,21 @@ function OllamaRow() {
 
   const testMutation = useMutation({
     mutationFn: () => testConnection('ollama'),
-    onSuccess: (result) => setConnResult(result),
+    onSuccess: (result) => {
+      setConnectionStatus('ollama', {
+        status: result.ok ? 'ok' : 'error',
+        error: result.error ?? undefined,
+      })
+    },
     onError: (err) => {
-      setConnResult({ ok: false, error: err instanceof Error ? err.message : String(err) })
+      setConnectionStatus('ollama', {
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      })
     },
   })
 
-  const badgeStatus = connResult === null ? 'untested' : connResult.ok ? 'ok' : 'error'
+  const connState = connectionStatuses['ollama'] ?? { status: 'untested' as const }
 
   return (
     <div className="space-y-3">
@@ -239,7 +252,7 @@ function OllamaRow() {
           {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Test Connection
         </Button>
-        <ConnectionBadge status={badgeStatus} error={connResult?.error} />
+        <ConnectionBadge status={connState.status} error={connState.error} />
       </div>
     </div>
   )

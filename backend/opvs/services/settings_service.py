@@ -42,10 +42,24 @@ async def delete_setting(db: AsyncSession, key: str) -> bool:
     return True
 
 
-async def test_connection(service: str) -> ConnectionTestResult:
+async def _get_setting_value(db: AsyncSession, key: str) -> str:
+    result = await db.execute(select(Setting).where(Setting.key == key))
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        return ""
+    return str(setting.value)
+
+
+async def test_connection(service: str, db: AsyncSession) -> ConnectionTestResult:
     try:
         if service == "anthropic":
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            api_key = await _get_setting_value(db, "anthropic_api_key")
+            if not api_key:
+                return ConnectionTestResult(
+                    ok=False,
+                    error="No API key saved. Enter and save your key first.",
+                )
+            client = anthropic.AsyncAnthropic(api_key=api_key)
             await client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=1,
@@ -53,11 +67,17 @@ async def test_connection(service: str) -> ConnectionTestResult:
             )
             return ConnectionTestResult(ok=True)
         elif service == "linear":
+            api_key = await _get_setting_value(db, "linear_api_key")
+            if not api_key:
+                return ConnectionTestResult(
+                    ok=False,
+                    error="No API key saved. Enter and save your key first.",
+                )
             async with httpx.AsyncClient() as http:
                 response = await http.post(
                     "https://api.linear.app/graphql",
                     json={"query": "{ viewer { id } }"},
-                    headers={"Authorization": f"Bearer {settings.linear_api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                 )
                 if response.status_code == 200:
                     body = response.json()
@@ -70,8 +90,9 @@ async def test_connection(service: str) -> ConnectionTestResult:
                     ok=False, error=f"HTTP {response.status_code}"
                 )
         elif service == "ollama":
+            host = await _get_setting_value(db, "ollama_host") or settings.ollama_host
             async with httpx.AsyncClient(timeout=5.0) as http:
-                response = await http.get(f"{settings.ollama_host}/api/tags")
+                response = await http.get(f"{host}/api/tags")
                 if response.status_code == 200:
                     return ConnectionTestResult(ok=True)
                 return ConnectionTestResult(

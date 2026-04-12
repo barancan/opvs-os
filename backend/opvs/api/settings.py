@@ -41,5 +41,8 @@ async def delete_setting(
 
 
 @router.post("/test/{service}", response_model=ConnectionTestResult)
-async def test_connection(service: str) -> ConnectionTestResult:
-    return await settings_service.test_connection(service)
+async def test_service_connection(
+    service: str,
+    db: AsyncSession = Depends(get_db),
+) -> ConnectionTestResult:
+    return await settings_service.test_connection(service, db)
