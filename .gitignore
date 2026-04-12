@@ -38,6 +38,12 @@ frontend/.vite/
 # Dev artifacts
 .dev-backend.pid
 
+# Runtime workspace (agents read/write here at runtime)
+backend/workspace/
+
+# TypeScript path-alias artifact (tsc resolving @ literally instead of via alias)
+frontend/@/
+
 # macOS
 .DS_Store
 **/.DS_Store
