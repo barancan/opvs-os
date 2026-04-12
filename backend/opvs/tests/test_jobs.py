@@ -15,7 +15,7 @@ VALID_JOB_PAYLOAD = {
 @pytest.mark.asyncio
 async def test_create_job(client: AsyncClient) -> None:
     with patch("opvs.services.job_service._register_job") as mock_register:
-        response = await client.post("/api/jobs/", json=VALID_JOB_PAYLOAD)
+        response = await client.post("/api/jobs", json=VALID_JOB_PAYLOAD)
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "Daily standup"
@@ -29,19 +29,19 @@ async def test_create_job(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_list_jobs_project_scoped(client: AsyncClient) -> None:
     with patch("opvs.services.job_service._register_job"):
-        await client.post("/api/jobs/", json=VALID_JOB_PAYLOAD)
+        await client.post("/api/jobs", json=VALID_JOB_PAYLOAD)
         await client.post(
-            "/api/jobs/",
+            "/api/jobs",
             json={**VALID_JOB_PAYLOAD, "project_id": 2, "name": "Other project job"},
         )
 
-    response = await client.get("/api/jobs/?project_id=1")
+    response = await client.get("/api/jobs?project_id=1")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
     assert data[0]["project_id"] == 1
 
-    response = await client.get("/api/jobs/?project_id=2")
+    response = await client.get("/api/jobs?project_id=2")
     assert response.status_code == 200
     assert len(response.json()) == 1
 
@@ -49,7 +49,7 @@ async def test_list_jobs_project_scoped(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_get_job(client: AsyncClient) -> None:
     with patch("opvs.services.job_service._register_job"):
-        create_resp = await client.post("/api/jobs/", json=VALID_JOB_PAYLOAD)
+        create_resp = await client.post("/api/jobs", json=VALID_JOB_PAYLOAD)
     job_id = create_resp.json()["id"]
 
     response = await client.get(f"/api/jobs/{job_id}")
@@ -60,14 +60,14 @@ async def test_get_job(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_get_job_not_found(client: AsyncClient) -> None:
-    response = await client.get("/api/jobs/9999")
+    response = await client.get("/api/jobs9999")
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_update_job_pause_removes_from_scheduler(client: AsyncClient) -> None:
     with patch("opvs.services.job_service._register_job"):
-        create_resp = await client.post("/api/jobs/", json=VALID_JOB_PAYLOAD)
+        create_resp = await client.post("/api/jobs", json=VALID_JOB_PAYLOAD)
     job_id = create_resp.json()["id"]
 
     with patch("opvs.services.job_service._remove_job") as mock_remove:
@@ -82,7 +82,7 @@ async def test_update_job_pause_removes_from_scheduler(client: AsyncClient) -> N
 @pytest.mark.asyncio
 async def test_delete_job(client: AsyncClient) -> None:
     with patch("opvs.services.job_service._register_job"):
-        create_resp = await client.post("/api/jobs/", json=VALID_JOB_PAYLOAD)
+        create_resp = await client.post("/api/jobs", json=VALID_JOB_PAYLOAD)
     job_id = create_resp.json()["id"]
 
     with patch("opvs.services.job_service._remove_job"):
@@ -98,21 +98,21 @@ async def test_delete_job(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_cron_validator_valid(client: AsyncClient) -> None:
     with patch("opvs.services.job_service._register_job"):
-        response = await client.post("/api/jobs/", json=VALID_JOB_PAYLOAD)
+        response = await client.post("/api/jobs", json=VALID_JOB_PAYLOAD)
     assert response.status_code == 201
 
 
 @pytest.mark.asyncio
 async def test_cron_validator_invalid(client: AsyncClient) -> None:
     payload = {**VALID_JOB_PAYLOAD, "cron": "invalid"}
-    response = await client.post("/api/jobs/", json=payload)
+    response = await client.post("/api/jobs", json=payload)
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_run_job_now(client: AsyncClient) -> None:
     with patch("opvs.services.job_service._register_job"):
-        create_resp = await client.post("/api/jobs/", json=VALID_JOB_PAYLOAD)
+        create_resp = await client.post("/api/jobs", json=VALID_JOB_PAYLOAD)
     job_id = create_resp.json()["id"]
 
     with patch("opvs.services.job_service._execute_job", new_callable=AsyncMock):
@@ -125,5 +125,5 @@ async def test_run_job_now(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_run_job_now_not_found(client: AsyncClient) -> None:
-    response = await client.post("/api/jobs/9999/run")
+    response = await client.post("/api/jobs9999/run")
     assert response.status_code == 404

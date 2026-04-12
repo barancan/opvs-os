@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { toast } from 'sonner'
 import { listProjects } from '@/api/projects'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
@@ -31,6 +32,8 @@ function AppInner() {
   const addToolApproval = useAppStore((s) => s.addToolApproval)
   const updateToolApproval = useAppStore((s) => s.updateToolApproval)
   const clearToolApprovals = useAppStore((s) => s.clearToolApprovals)
+  const addRunningJob = useAppStore((s) => s.addRunningJob)
+  const removeRunningJob = useAppStore((s) => s.removeRunningJob)
 
   // Bootstrap: ensure activeProjectId always points to a valid active project
   const { data: projects } = useQuery({
@@ -96,6 +99,26 @@ function AppInner() {
           result: content,
         })
       }
+    },
+    job_started: (payload: unknown) => {
+      const { job_id } = payload as { job_id: number; project_id: number }
+      addRunningJob(job_id)
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      toast.info(`Job #${job_id} started`)
+    },
+    job_completed: (payload: unknown) => {
+      const { job_id } = payload as { job_id: number }
+      removeRunningJob(job_id)
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      void qc.invalidateQueries({ queryKey: ['notifications'] })
+      toast.success(`Job #${job_id} completed — check notifications`)
+    },
+    job_failed: (payload: unknown) => {
+      const { job_id, error } = payload as { job_id: number; error: string }
+      removeRunningJob(job_id)
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      void qc.invalidateQueries({ queryKey: ['notifications'] })
+      toast.error(`Job #${job_id} failed: ${error}`)
     },
   })
 
