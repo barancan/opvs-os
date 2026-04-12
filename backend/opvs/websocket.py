@@ -18,6 +18,9 @@ WS_TOOL_APPROVAL_REQUIRED = "tool_approval_required"
 WS_TOOL_USED = "tool_used"
 WS_TOOL_RESULT = "tool_result"
 WS_TOOL_REJECTED = "tool_rejected"
+WS_JOB_STARTED = "job_started"
+WS_JOB_COMPLETED = "job_completed"
+WS_JOB_FAILED = "job_failed"
 
 router = APIRouter()
 

@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from opvs.api.router import api_router
 from opvs.config import settings
 from opvs.database import init_db
+from opvs.scheduler import start_scheduler, stop_scheduler
 from opvs.websocket import router as ws_router
 
 logging.basicConfig(
@@ -53,7 +54,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         for project in existing_projects:
             _create_project_workspace(wp, project.slug)
 
+    await start_scheduler(app)
     yield
+    stop_scheduler()
 
 
 app = FastAPI(title="opvs OS", version="0.1.0", lifespan=lifespan)
