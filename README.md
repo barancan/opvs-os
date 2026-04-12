@@ -84,7 +84,47 @@ Go to **Projects** and click **New project**. Every project gets:
 
 Use the **project switcher** in the sidebar to switch between projects. All chat history, notifications, and context compaction are scoped to the active project.
 
-### 6. Chat with the orchestrator
+### 6. Manage skills
+
+Skills extend the orchestrator with real-world capabilities. Go to **Projects**, open a project card, and scroll to the **Skills** section.
+
+#### Available skills
+
+| Skill | What it can do | Requires |
+|---|---|---|
+| **Workspace** | Read files, list directories, capture notes to `_memory/inbox/` | Nothing — always on |
+| **Linear** | Read teams/projects/issues, create issues, update issues, post comments | Linear API key |
+
+#### Enabling a skill
+
+1. Ensure any required API key is configured in **Settings** first. Skills with an unconfigured key show an amber warning and their toggle is disabled.
+2. Click the toggle next to the skill name to enable it. The toggle turns green immediately and the change persists.
+3. To disable, click the toggle again.
+
+The **Workspace** skill is always active and cannot be turned off — it gives the orchestrator read access to the project's workspace directory and the ability to capture notes.
+
+#### Tool approval
+
+When the orchestrator wants to execute a **write** action (creating an issue, posting a comment, etc.) it pauses and shows an **approval card** inline in the chat:
+
+```
+┌──────────────────────────────────────────────────┐
+│ [Linear]  Create issue               ▼ details   │
+│ Create issue "Investigate USDC..." in team ENG   │
+│                                                  │
+│  ✓ Approve       ✕ Reject                       │
+└──────────────────────────────────────────────────┘
+```
+
+- Click **Approve** — the card transitions to *Executing…* and then shows the result once done.
+- Click **Reject** — the card marks the action as *Rejected* and the orchestrator acknowledges in its response.
+- Click the **▼** chevron to expand the raw parameters before deciding.
+
+Read-only actions (listing issues, fetching a team, reading a file) execute silently without any approval prompt.
+
+Approval cards clear automatically when the chat turn completes.
+
+### 7. Chat with the orchestrator
 
 Select a project and use the **Orchestrator** chat panel on the Dashboard. The panel shows live token usage (compacts automatically at 75% of the context window). Type `/compact` to clear history manually.
 
@@ -142,5 +182,9 @@ Context window sizes:
 | `kill_switch_recovered` | `{}` |
 | `notification_created` | notification object |
 | `notification_updated` | notification object |
+| `tool_approval_required` | `{ request_id, tool_name, platform, action, description, parameters }` |
+| `tool_used` | `{ tool_name, platform }` |
+| `tool_result` | `{ tool_name, success, content }` |
+| `tool_rejected` | `{ request_id }` |
 
 See `workspace/CLAUDE.md` for workspace conventions and agent rules.
