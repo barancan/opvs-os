@@ -1,13 +1,27 @@
+import { useQuery } from '@tanstack/react-query'
+import { listProjects } from '@/api/projects'
 import { KillSwitchButton } from '@/components/dashboard/KillSwitchButton'
 import { NotificationInbox } from '@/components/dashboard/NotificationInbox'
 import { OrchestratorChat } from '@/components/dashboard/OrchestratorChat'
+import { useAppStore } from '@/stores/useAppStore'
 
 export default function Dashboard() {
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
+
+  const { data: projects } = useQuery({
+    queryKey: ['projects', 'active'],
+    queryFn: () => listProjects('active'),
+  })
+
+  const activeProject = projects?.find((p) => p.id === activeProjectId)
+
   return (
     <div className="flex flex-col h-full p-6 gap-4 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between flex-shrink-0">
-        <h1 className="text-xl font-semibold text-zinc-100">Dashboard</h1>
+        <h1 className="text-xl font-semibold text-zinc-100">
+          {activeProject?.name ?? 'Dashboard'}
+        </h1>
         <KillSwitchButton />
       </div>
 

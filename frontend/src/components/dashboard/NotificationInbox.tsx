@@ -4,6 +4,7 @@ import { getNotifications, updateNotificationStatus } from '@/api/notifications'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useAppStore } from '@/stores/useAppStore'
 import type { Notification, NotificationSourceType, NotificationStatus } from '@/types/api'
 
 function relativeTime(dateStr: string): string {
@@ -105,15 +106,21 @@ function EmptyState({ message }: { message: string }) {
 }
 
 export function NotificationInbox() {
-  const { data: pending = [] } = useQuery({
-    queryKey: ['notifications', 'pending'],
-    queryFn: () => getNotifications('pending'),
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
+
+  const { data: pending = [], isLoading: pendingLoading } = useQuery({
+    queryKey: ['notifications', 'pending', activeProjectId],
+    queryFn: () => getNotifications('pending', activeProjectId ?? undefined),
+    enabled: activeProjectId !== null,
   })
 
-  const { data: completed = [] } = useQuery({
-    queryKey: ['notifications', 'completed'],
-    queryFn: () => getNotifications('completed'),
+  const { data: completed = [], isLoading: completedLoading } = useQuery({
+    queryKey: ['notifications', 'completed', activeProjectId],
+    queryFn: () => getNotifications('completed', activeProjectId ?? undefined),
+    enabled: activeProjectId !== null,
   })
+
+  const isLoading = activeProjectId === null || pendingLoading || completedLoading
 
   return (
     <div className="space-y-3">
@@ -132,7 +139,11 @@ export function NotificationInbox() {
         </TabsList>
 
         <TabsContent value="inbox" className="mt-3 space-y-2">
-          {pending.length === 0 ? (
+          {isLoading ? (
+            <div className="flex justify-center py-8">
+              <span className="text-xs text-zinc-600">Loading…</span>
+            </div>
+          ) : pending.length === 0 ? (
             <EmptyState message="No pending notifications" />
           ) : (
             pending.map((n) => (
@@ -142,7 +153,11 @@ export function NotificationInbox() {
         </TabsContent>
 
         <TabsContent value="completed" className="mt-3 space-y-2">
-          {completed.length === 0 ? (
+          {isLoading ? (
+            <div className="flex justify-center py-8">
+              <span className="text-xs text-zinc-600">Loading…</span>
+            </div>
+          ) : completed.length === 0 ? (
             <EmptyState message="No completed notifications yet" />
           ) : (
             completed.map((n) => (
