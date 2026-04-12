@@ -1,10 +1,13 @@
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocketManager:
@@ -54,8 +57,10 @@ manager = WebSocketManager()
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, client_id: str = "default") -> None:
     await manager.connect(websocket, client_id)
+    logger.info("WebSocket connected: client_id=%s", client_id)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(client_id)
+        logger.info("WebSocket disconnected: client_id=%s", client_id)

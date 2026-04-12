@@ -1,16 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { getSetting, testConnection, upsertSetting } from '@/api/settings'
+import { getSettingOrNull, testConnection, upsertSetting } from '@/api/settings'
 import { ConnectionBadge } from '@/components/shared/ConnectionBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import type { ConnectionTestResult } from '@/types/api'
-import { ApiError } from '@/api/client'
+import { useAppStore } from '@/stores/useAppStore'
 
 // ---------------------------------------------------------------------------
 // Workspace section
@@ -22,20 +21,15 @@ function WorkspaceSection() {
 
   const { data } = useQuery({
     queryKey: ['setting', 'workspace_path'],
-    queryFn: () => getSetting('workspace_path'),
-    retry: (failureCount, error) => {
-      if (error instanceof ApiError && error.status === 404) return false
-      return failureCount < 1
-    },
-    select: (d) => d.value,
+    queryFn: () => getSettingOrNull('workspace_path'),
   })
 
-  // Sync fetched value into local state once
-  const [synced, setSynced] = useState(false)
-  if (data !== undefined && !synced) {
-    setValue(data)
-    setSynced(true)
-  }
+  // Sync fetched value into local state when query result arrives
+  useEffect(() => {
+    if (data !== undefined) {
+      setValue(data?.value ?? '')
+    }
+  }, [data])
 
   const mutation = useMutation({
     mutationFn: () => upsertSetting('workspace_path', { value, is_secret: false }),
@@ -83,21 +77,36 @@ interface SecretKeyRowProps {
   settingKey: string
   label: string
   service: string
-  placeholder?: string
 }
 
-function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowProps) {
+function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
   const qc = useQueryClient()
   const [inputValue, setInputValue] = useState('')
-  const [connResult, setConnResult] = useState<ConnectionTestResult | null>(null)
+  const [isEditing, setIsEditing] = useState(false)
+  const connectionStatuses = useAppStore((s) => s.connectionStatuses)
+  const setConnectionStatus = useAppStore((s) => s.setConnectionStatus)
 
-  // Check if key exists (to show placeholder hint)
   const { data: existing } = useQuery({
     queryKey: ['setting', settingKey],
-    queryFn: () => getSetting(settingKey),
-    retry: (failureCount, error) => {
-      if (error instanceof ApiError && error.status === 404) return false
-      return failureCount < 1
+    queryFn: () => getSettingOrNull(settingKey),
+  })
+
+  const keyIsSaved = existing !== undefined && existing !== null
+
+  // testMutation defined first so saveMutation.onSuccess can trigger it
+  const testMutation = useMutation({
+    mutationFn: () => testConnection(service),
+    onSuccess: (result) => {
+      setConnectionStatus(service, {
+        status: result.ok ? 'ok' : 'error',
+        error: result.error ?? undefined,
+      })
+    },
+    onError: (err) => {
+      setConnectionStatus(service, {
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      })
     },
   })
 
@@ -106,25 +115,23 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['setting', settingKey] })
       setInputValue('')
-      setConnResult(null)
+      setIsEditing(false)
+      setConnectionStatus(service, { status: 'untested' })
       toast.success('Saved')
+      testMutation.mutate()
     },
     onError: (err) => {
       toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`)
     },
   })
 
-  const testMutation = useMutation({
-    mutationFn: () => testConnection(service),
-    onSuccess: (result) => {
-      setConnResult(result)
-    },
-    onError: (err) => {
-      setConnResult({ ok: false, error: err instanceof Error ? err.message : String(err) })
-    },
-  })
+  const connState = connectionStatuses[service] ?? { status: 'untested' as const }
 
-  const badgeStatus = connResult === null ? 'untested' : connResult.ok ? 'ok' : 'error'
+  // When a key is saved and the user isn't actively editing, show a dummy
+  // masked value so the field looks populated (password field renders any
+  // character as a dot, so 16 bullets → 16 dots).
+  const SAVED_MASK = '••••••••••••••••'
+  const displayValue = keyIsSaved && !isEditing ? SAVED_MASK : inputValue
 
   return (
     <div className="space-y-3">
@@ -133,11 +140,18 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
         <Input
           id={settingKey}
           type="password"
-          value={inputValue}
+          value={displayValue}
+          onFocus={() => {
+            if (keyIsSaved && !isEditing) {
+              setIsEditing(true)
+              setInputValue('')
+            }
+          }}
+          onBlur={() => {
+            if (!inputValue) setIsEditing(false)
+          }}
           onChange={(e) => setInputValue(e.target.value)}
-          placeholder={
-            existing ? 'API key saved — enter new value to update' : (placeholder ?? 'Enter API key')
-          }
+          placeholder="Enter API key"
           autoComplete="new-password"
         />
       </div>
@@ -145,7 +159,7 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
         <Button
           size="sm"
           onClick={() => saveMutation.mutate()}
-          disabled={saveMutation.isPending || !inputValue}
+          disabled={saveMutation.isPending || !isEditing || !inputValue}
         >
           {saveMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Save
@@ -154,15 +168,12 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
           size="sm"
           variant="outline"
           onClick={() => testMutation.mutate()}
-          disabled={testMutation.isPending}
+          disabled={testMutation.isPending || saveMutation.isPending}
         >
           {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Test Connection
         </Button>
-        <ConnectionBadge
-          status={badgeStatus}
-          error={connResult?.error}
-        />
+        <ConnectionBadge status={connState.status} error={connState.error} />
       </div>
     </div>
   )
@@ -175,23 +186,19 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
 function OllamaRow() {
   const qc = useQueryClient()
   const [value, setValue] = useState('')
-  const [connResult, setConnResult] = useState<ConnectionTestResult | null>(null)
+  const connectionStatuses = useAppStore((s) => s.connectionStatuses)
+  const setConnectionStatus = useAppStore((s) => s.setConnectionStatus)
 
   const { data } = useQuery({
     queryKey: ['setting', 'ollama_host'],
-    queryFn: () => getSetting('ollama_host'),
-    retry: (failureCount, error) => {
-      if (error instanceof ApiError && error.status === 404) return false
-      return failureCount < 1
-    },
-    select: (d) => d.value,
+    queryFn: () => getSettingOrNull('ollama_host'),
   })
 
-  const [synced, setSynced] = useState(false)
-  if (data !== undefined && !synced) {
-    setValue(data)
-    setSynced(true)
-  }
+  useEffect(() => {
+    if (data !== undefined) {
+      setValue(data?.value ?? '')
+    }
+  }, [data])
 
   const saveMutation = useMutation({
     mutationFn: () => upsertSetting('ollama_host', { value, is_secret: false }),
@@ -206,13 +213,21 @@ function OllamaRow() {
 
   const testMutation = useMutation({
     mutationFn: () => testConnection('ollama'),
-    onSuccess: (result) => setConnResult(result),
+    onSuccess: (result) => {
+      setConnectionStatus('ollama', {
+        status: result.ok ? 'ok' : 'error',
+        error: result.error ?? undefined,
+      })
+    },
     onError: (err) => {
-      setConnResult({ ok: false, error: err instanceof Error ? err.message : String(err) })
+      setConnectionStatus('ollama', {
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      })
     },
   })
 
-  const badgeStatus = connResult === null ? 'untested' : connResult.ok ? 'ok' : 'error'
+  const connState = connectionStatuses['ollama'] ?? { status: 'untested' as const }
 
   return (
     <div className="space-y-3">
@@ -239,7 +254,7 @@ function OllamaRow() {
           {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Test Connection
         </Button>
-        <ConnectionBadge status={badgeStatus} error={connResult?.error} />
+        <ConnectionBadge status={connState.status} error={connState.error} />
       </div>
     </div>
   )
@@ -267,7 +282,6 @@ export default function Settings() {
               settingKey="anthropic_api_key"
               label="API Key"
               service="anthropic"
-              placeholder="sk-ant-..."
             />
           </div>
           <Separator />
@@ -287,7 +301,6 @@ export default function Settings() {
             settingKey="linear_api_key"
             label="API Key"
             service="linear"
-            placeholder="lin_api_..."
           />
         </CardContent>
       </Card>
