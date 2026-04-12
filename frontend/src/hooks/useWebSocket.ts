@@ -23,8 +23,16 @@ export function useWebSocket(handlers: EventHandlers): void {
     function connect() {
       if (destroyed) return
       setWsStatus('connecting')
+      // In dev mode (Vite on 5173) connect directly to the backend rather than
+      // routing through Vite's proxy.  Vite-as-middleman causes EPIPE every time
+      // uvicorn reloads, and "closed before established" on first load because the
+      // proxy tries to forward before the backend worker has bound port 8000.
+      // In production the frontend is served from port 8000 (same origin), so
+      // window.location.host resolves correctly without any proxy.
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//${window.location.host}/ws`
+      const wsUrl = import.meta.env.DEV
+        ? 'ws://127.0.0.1:8000/ws'
+        : `${protocol}//${window.location.host}/ws`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
