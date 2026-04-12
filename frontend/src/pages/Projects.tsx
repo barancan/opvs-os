@@ -67,10 +67,8 @@ function SkillToggleRow({
             ].join(' ')}
           >
             <span
-              className={[
-                'absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform',
-                skill.enabled ? 'translate-x-[17px]' : 'translate-x-0.5',
-              ].join(' ')}
+              style={{ left: skill.enabled ? '18px' : '2px' }}
+              className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-200"
             />
           </button>
         )}
