@@ -73,3 +73,41 @@ export interface KillSwitchStatus {
   active: boolean
   activated_at: string | null
 }
+
+// Projects
+export type ProjectStatus = 'active' | 'archived'
+
+export interface LinearLink {
+  id: number
+  project_id: number
+  linear_project_id: string
+  linear_project_name: string
+  created_at: string
+}
+
+export interface Project {
+  id: number
+  name: string
+  slug: string
+  description: string | null
+  status: ProjectStatus
+  created_at: string
+  updated_at: string
+  linear_links: LinearLink[]
+}
+
+export interface ProjectCreate {
+  name: string
+  description?: string
+}
+
+export interface ProjectUpdate {
+  name?: string
+  description?: string
+  status?: ProjectStatus
+}
+
+export interface LinearLinkCreate {
+  linear_project_id: string
+  linear_project_name: string
+}

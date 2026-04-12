@@ -1,11 +1,13 @@
-import { BarChart2, Bot, Clock, LayoutDashboard, Settings2 } from 'lucide-react'
+import { BarChart2, Bot, Clock, FolderOpen, LayoutDashboard, Settings2 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
+import { ProjectSwitcher } from '@/components/layout/ProjectSwitcher'
 import { useAppStore } from '@/stores/useAppStore'
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: LayoutDashboard },
   { label: 'Agents', path: '/agents', icon: Bot },
   { label: 'Jobs', path: '/jobs', icon: Clock },
+  { label: 'Projects', path: '/projects', icon: FolderOpen },
   { label: 'Settings', path: '/settings', icon: Settings2 },
   { label: 'Analytics', path: '/analytics', icon: BarChart2 },
 ]
@@ -36,6 +38,11 @@ export function Sidebar() {
           alt="opvs OS"
           className="h-6 w-auto"
         />
+      </div>
+
+      {/* Project switcher */}
+      <div className="px-2 pb-2">
+        <ProjectSwitcher />
       </div>
 
       <nav className="flex-1 space-y-1 px-2">

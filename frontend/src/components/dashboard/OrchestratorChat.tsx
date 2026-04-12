@@ -108,6 +108,16 @@ function StreamingBubble({ content }: { content: string }) {
 // Main chat component
 // ------------------------------------------------------------------
 
+interface SendVariables {
+  content: string
+  projectId: number | null
+}
+
+interface SendContext {
+  optimisticId: number
+  projectId: number | null
+}
+
 export function OrchestratorChat() {
   const qc = useQueryClient()
   const [input, setInput] = useState('')
@@ -116,15 +126,23 @@ export function OrchestratorChat() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
   const streamingContent = useAppStore((s) => s.streamingContent)
   const isStreaming = useAppStore((s) => s.isStreaming)
   const clearStreamingContent = useAppStore((s) => s.clearStreamingContent)
   const setIsStreaming = useAppStore((s) => s.setIsStreaming)
 
   const { data: history = [] } = useQuery({
-    queryKey: ['chatHistory'],
-    queryFn: getChatHistory,
+    queryKey: ['chatHistory', activeProjectId],
+    queryFn: () => getChatHistory(activeProjectId ?? undefined),
+    enabled: activeProjectId !== null,
   })
+
+  // Clear streaming state when switching projects
+  useEffect(() => {
+    clearStreamingContent()
+    setIsStreaming(false)
+  }, [activeProjectId, clearStreamingContent, setIsStreaming])
 
   // Listen for compact_triggered via query invalidation — track locally for indicator
   const prevHistoryLen = useRef(history.length)
@@ -153,10 +171,10 @@ export function OrchestratorChat() {
     return () => document.removeEventListener('mousedown', handleOutside)
   }, [showMenu])
 
-  const sendMutation = useMutation({
-    mutationFn: (content: string) => sendMessage(content, wsClientId),
-    onMutate: (content: string) => {
-      // Show user message immediately without waiting for the server round-trip
+  const sendMutation = useMutation<ChatMessage, Error, SendVariables, SendContext>({
+    mutationFn: ({ content, projectId }) =>
+      sendMessage(content, wsClientId, projectId ?? undefined),
+    onMutate: ({ content, projectId }) => {
       clearStreamingContent()
       setIsStreaming(true)
       const optimisticId = -Date.now()
@@ -168,19 +186,20 @@ export function OrchestratorChat() {
         is_compact_summary: false,
         created_at: new Date().toISOString(),
       }
-      qc.setQueryData<ChatMessage[]>(['chatHistory'], (old = []) => [...old, optimisticMsg])
-      return { optimisticId }
+      qc.setQueryData<ChatMessage[]>(['chatHistory', projectId], (old = []) => [
+        ...old,
+        optimisticMsg,
+      ])
+      return { optimisticId, projectId }
     },
-    onSuccess: () => {
-      // The WS chat_complete handler already does this when WS is working.
-      // Calling again here is idempotent and covers the WS-broken fallback.
+    onSuccess: (_data, _vars, context) => {
       setIsStreaming(false)
       clearStreamingContent()
-      void qc.invalidateQueries({ queryKey: ['chatHistory'] })
+      void qc.invalidateQueries({ queryKey: ['chatHistory', context?.projectId] })
     },
-    onError: (err, _content, context) => {
+    onError: (err, _vars, context) => {
       if (context) {
-        qc.setQueryData<ChatMessage[]>(['chatHistory'], (old = []) =>
+        qc.setQueryData<ChatMessage[]>(['chatHistory', context.projectId], (old = []) =>
           old.filter((m) => m.id !== context.optimisticId),
         )
       }
@@ -205,7 +224,7 @@ export function OrchestratorChat() {
 
   function handleSend() {
     const trimmed = input.trim()
-    if (!trimmed) return
+    if (!trimmed || activeProjectId === null) return
 
     if (trimmed === '/compact') {
       clearMutation.mutate()
@@ -213,7 +232,7 @@ export function OrchestratorChat() {
       return
     }
 
-    sendMutation.mutate(trimmed)
+    sendMutation.mutate({ content: trimmed, projectId: activeProjectId })
     setInput('')
   }
 
@@ -223,6 +242,8 @@ export function OrchestratorChat() {
       handleSend()
     }
   }
+
+  const canSend = activeProjectId !== null
 
   return (
     <div className="flex flex-col h-96 rounded-lg border border-zinc-800 bg-zinc-950">
@@ -295,8 +316,12 @@ export function OrchestratorChat() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask the orchestrator… (or /compact to clear)"
-          disabled={sendMutation.isPending || isStreaming}
+          placeholder={
+            canSend
+              ? 'Ask the orchestrator… (or /compact to clear)'
+              : 'Select a project to start chatting'
+          }
+          disabled={sendMutation.isPending || isStreaming || !canSend}
           className={cn(
             'flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100',
             'placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500',
@@ -306,7 +331,7 @@ export function OrchestratorChat() {
         <Button
           size="sm"
           onClick={handleSend}
-          disabled={sendMutation.isPending || isStreaming || !input.trim()}
+          disabled={sendMutation.isPending || isStreaming || !input.trim() || !canSend}
           aria-label="Send message"
         >
           <SendIcon className="h-4 w-4" />
