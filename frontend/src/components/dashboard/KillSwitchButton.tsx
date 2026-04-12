@@ -96,8 +96,8 @@ export function KillSwitchButton() {
             animationDuration,
             animationTimingFunction: 'ease-in-out',
             animationIterationCount: 'infinite',
-            width: 72,
-            height: 72,
+            width: 36,
+            height: 36,
           }}
           className={cn(
             'rounded-[18px] border-0 cursor-pointer transition-all duration-300 disabled:cursor-not-allowed',
