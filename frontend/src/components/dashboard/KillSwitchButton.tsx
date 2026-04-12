@@ -100,7 +100,7 @@ export function KillSwitchButton() {
             height: 72,
           }}
           className={cn(
-            'rounded-full border-0 cursor-pointer transition-all duration-300 disabled:cursor-not-allowed',
+            'rounded-[18px] border-0 cursor-pointer transition-all duration-300 disabled:cursor-not-allowed',
             killSwitchActive ? 'bg-zinc-800' : 'bg-red-700',
           )}
           aria-label={
