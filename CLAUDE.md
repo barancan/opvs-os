@@ -40,6 +40,7 @@ git checkout -b phase-1/foundation
 - No secrets in source code or committed files
 - POSIX sh only in scripts — no bash-specific syntax
 - Tests use in-memory SQLite — never touch the dev database
+- We follow TDD. When planning make sure to generate tests.
 
 ## Project structure
 
@@ -58,3 +59,20 @@ Phase 4: Jobs + Linear integration
 Phase 5: Memory system + analytics
 
 ## Do not build beyond the current phase prompt without being asked.
+
+## Known implementation decisions (do not change these)
+
+### SQLAlchemy
+
+- Use `DeclarativeBase` class (SQLAlchemy 2.0 style), not `declarative_base()` — required for strict mypy
+- Example: `class Base(DeclarativeBase): pass`
+
+### Alembic + asyncio
+
+- Do not call `alembic.command.upgrade()` directly inside an async lifespan — causes nested event loop conflict
+- Use `asyncio.to_thread()` to run Alembic migrations from the lifespan handler
+
+### Alembic path resolution
+
+- Set `script_location` and `sqlalchemy.url` programmatically in `main.py`, not via `alembic.ini`
+- This ensures paths resolve correctly when uvicorn runs from the project root
