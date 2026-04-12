@@ -10,7 +10,7 @@ export class ApiError extends Error {
   }
 }
 
-const BASE_URL = 'http://localhost:8000'
+const BASE_URL = ''
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {

@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react'
 import type { WebSocketEvent } from '@/types/api'
 import { useAppStore } from '@/stores/useAppStore'
 
-const WS_URL = 'ws://localhost:8000/ws'
 const MAX_BACKOFF_MS = 30_000
 
 type EventHandlers = Record<string, (payload: unknown) => void>
@@ -24,7 +23,9 @@ export function useWebSocket(handlers: EventHandlers): void {
     function connect() {
       if (destroyed) return
       setWsStatus('connecting')
-      const ws = new WebSocket(WS_URL)
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const wsUrl = `${protocol}//${window.location.host}/ws`
+      const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => {

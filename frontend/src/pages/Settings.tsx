@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { getSetting, testConnection, upsertSetting } from '@/api/settings'
+import { getSettingOrNull, testConnection, upsertSetting } from '@/api/settings'
 import { ConnectionBadge } from '@/components/shared/ConnectionBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,7 +10,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { useAppStore } from '@/stores/useAppStore'
-import { ApiError } from '@/api/client'
 
 // ---------------------------------------------------------------------------
 // Workspace section
@@ -22,20 +21,15 @@ function WorkspaceSection() {
 
   const { data } = useQuery({
     queryKey: ['setting', 'workspace_path'],
-    queryFn: () => getSetting('workspace_path'),
-    retry: (failureCount, error) => {
-      if (error instanceof ApiError && error.status === 404) return false
-      return failureCount < 1
-    },
-    select: (d) => d.value,
+    queryFn: () => getSettingOrNull('workspace_path'),
   })
 
-  // Sync fetched value into local state once
-  const [synced, setSynced] = useState(false)
-  if (data !== undefined && !synced) {
-    setValue(data)
-    setSynced(true)
-  }
+  // Sync fetched value into local state when query result arrives
+  useEffect(() => {
+    if (data !== undefined) {
+      setValue(data?.value ?? '')
+    }
+  }, [data])
 
   const mutation = useMutation({
     mutationFn: () => upsertSetting('workspace_path', { value, is_secret: false }),
@@ -83,24 +77,20 @@ interface SecretKeyRowProps {
   settingKey: string
   label: string
   service: string
-  placeholder?: string
 }
 
-function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowProps) {
+function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
   const qc = useQueryClient()
   const [inputValue, setInputValue] = useState('')
   const connectionStatuses = useAppStore((s) => s.connectionStatuses)
   const setConnectionStatus = useAppStore((s) => s.setConnectionStatus)
 
-  // Check if key exists (to show placeholder hint)
   const { data: existing } = useQuery({
     queryKey: ['setting', settingKey],
-    queryFn: () => getSetting(settingKey),
-    retry: (failureCount, error) => {
-      if (error instanceof ApiError && error.status === 404) return false
-      return failureCount < 1
-    },
+    queryFn: () => getSettingOrNull(settingKey),
   })
+
+  const keyIsSaved = existing !== undefined && existing !== null
 
   const saveMutation = useMutation({
     mutationFn: () => upsertSetting(settingKey, { value: inputValue, is_secret: true }),
@@ -142,11 +132,14 @@ function SecretKeyRow({ settingKey, label, service, placeholder }: SecretKeyRowP
           type="password"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          placeholder={
-            existing ? 'API key saved — enter new value to update' : (placeholder ?? 'Enter API key')
-          }
+          placeholder="Enter API key to update"
           autoComplete="new-password"
         />
+        {keyIsSaved && (
+          <p className="text-xs text-zinc-500">
+            A key is already saved. Enter a new value to replace it.
+          </p>
+        )}
       </div>
       <div className="flex items-center gap-3">
         <Button
@@ -184,19 +177,14 @@ function OllamaRow() {
 
   const { data } = useQuery({
     queryKey: ['setting', 'ollama_host'],
-    queryFn: () => getSetting('ollama_host'),
-    retry: (failureCount, error) => {
-      if (error instanceof ApiError && error.status === 404) return false
-      return failureCount < 1
-    },
-    select: (d) => d.value,
+    queryFn: () => getSettingOrNull('ollama_host'),
   })
 
-  const [synced, setSynced] = useState(false)
-  if (data !== undefined && !synced) {
-    setValue(data)
-    setSynced(true)
-  }
+  useEffect(() => {
+    if (data !== undefined) {
+      setValue(data?.value ?? '')
+    }
+  }, [data])
 
   const saveMutation = useMutation({
     mutationFn: () => upsertSetting('ollama_host', { value, is_secret: false }),
@@ -280,7 +268,6 @@ export default function Settings() {
               settingKey="anthropic_api_key"
               label="API Key"
               service="anthropic"
-              placeholder="sk-ant-..."
             />
           </div>
           <Separator />
@@ -300,7 +287,6 @@ export default function Settings() {
             settingKey="linear_api_key"
             label="API Key"
             service="linear"
-            placeholder="lin_api_..."
           />
         </CardContent>
       </Card>
