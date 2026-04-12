@@ -36,6 +36,11 @@ interface AppState {
   updateToolApproval: (requestId: string, updates: Partial<ToolApprovalState>) => void
   clearToolApprovals: () => void
 
+  // Running jobs (runtime only — not persisted)
+  runningJobIds: number[]
+  addRunningJob: (id: number) => void
+  removeRunningJob: (id: number) => void
+
   // Active project (persisted to localStorage)
   activeProjectId: number | null
   setActiveProjectId: (id: number | null) => void
@@ -80,6 +85,15 @@ export const useAppStore = create<AppState>()(
           },
         })),
       clearToolApprovals: () => set({ toolApprovals: {} }),
+
+      // Running jobs
+      runningJobIds: [],
+      addRunningJob: (id) =>
+        set((s) => ({
+          runningJobIds: s.runningJobIds.includes(id) ? s.runningJobIds : [...s.runningJobIds, id],
+        })),
+      removeRunningJob: (id) =>
+        set((s) => ({ runningJobIds: s.runningJobIds.filter((j) => j !== id) })),
 
       // Active project
       activeProjectId: null,

@@ -129,6 +129,42 @@ export interface ToolApprovalState extends ToolApprovalRequest {
   result?: string
 }
 
+// Scheduled Jobs
+export type JobStatus = 'active' | 'paused' | 'archived'
+
+export interface ScheduledJob {
+  id: number
+  project_id: number
+  name: string
+  description: string | null
+  cron: string
+  timezone: string
+  prompt: string
+  status: JobStatus
+  last_run_at: string | null
+  last_run_status: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ScheduledJobCreate {
+  project_id: number
+  name: string
+  description?: string
+  cron: string
+  timezone: string
+  prompt: string
+}
+
+export interface ScheduledJobUpdate {
+  name?: string
+  description?: string
+  cron?: string
+  timezone?: string
+  prompt?: string
+  status?: JobStatus
+}
+
 // Skills
 export interface ProjectSkill {
   skill_id: string
