@@ -14,6 +14,19 @@ interface AppState {
   setWsStatus: (status: WsStatus) => void
   connectionStatuses: Record<string, ServiceConnectionState>
   setConnectionStatus: (service: string, state: ServiceConnectionState) => void
+
+  // Kill switch
+  killSwitchActive: boolean
+  killSwitchArmed: boolean
+  setKillSwitchActive: (active: boolean) => void
+  setKillSwitchArmed: (armed: boolean) => void
+
+  // Chat streaming
+  streamingContent: string
+  isStreaming: boolean
+  appendStreamToken: (token: string) => void
+  clearStreamingContent: () => void
+  setIsStreaming: (streaming: boolean) => void
 }
 
 export const useAppStore = create<AppState>()((set) => ({
@@ -22,4 +35,18 @@ export const useAppStore = create<AppState>()((set) => ({
   connectionStatuses: {},
   setConnectionStatus: (service, state) =>
     set((s) => ({ connectionStatuses: { ...s.connectionStatuses, [service]: state } })),
+
+  // Kill switch
+  killSwitchActive: false,
+  killSwitchArmed: false,
+  setKillSwitchActive: (active) => set({ killSwitchActive: active }),
+  setKillSwitchArmed: (armed) => set({ killSwitchArmed: armed }),
+
+  // Chat streaming
+  streamingContent: '',
+  isStreaming: false,
+  appendStreamToken: (token) =>
+    set((s) => ({ streamingContent: s.streamingContent + token })),
+  clearStreamingContent: () => set({ streamingContent: '' }),
+  setIsStreaming: (streaming) => set({ isStreaming: streaming }),
 }))

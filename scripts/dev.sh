@@ -5,6 +5,14 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$PROJECT_ROOT"
 
+# Kill any leftover backend process on port 8000
+OLD_PID=$(lsof -ti:8000 2>/dev/null || true)
+if [ -n "$OLD_PID" ]; then
+  echo "Killing leftover process on port 8000 (PID $OLD_PID)..."
+  kill "$OLD_PID" 2>/dev/null || true
+  sleep 1
+fi
+
 # Check venv exists
 if [ ! -d ".venv" ]; then
   echo "ERROR: .venv not found. Run ./scripts/setup.sh first." >&2

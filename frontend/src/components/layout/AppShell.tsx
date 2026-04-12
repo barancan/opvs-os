@@ -5,7 +5,7 @@ export function AppShell() {
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950">
       <Sidebar />
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 h-full overflow-hidden">
         <Outlet />
       </main>
     </div>

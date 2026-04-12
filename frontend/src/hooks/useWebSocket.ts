@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { wsClientId } from '@/lib/wsClientId'
 import type { WebSocketEvent } from '@/types/api'
 import { useAppStore } from '@/stores/useAppStore'
 
@@ -31,8 +32,8 @@ export function useWebSocket(handlers: EventHandlers): void {
       // window.location.host resolves correctly without any proxy.
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const wsUrl = import.meta.env.DEV
-        ? 'ws://127.0.0.1:8000/ws'
-        : `${protocol}//${window.location.host}/ws`
+        ? `ws://127.0.0.1:8000/ws?client_id=${wsClientId}`
+        : `${protocol}//${window.location.host}/ws?client_id=${wsClientId}`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 

@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from opvs.database import Base
 from opvs.models.settings import Setting  # noqa: F401 — registers model on Base
+from opvs.models.notification import Notification  # noqa: F401
+from opvs.models.chat_message import ChatMessage  # noqa: F401
 
 config = context.config
 

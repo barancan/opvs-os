@@ -52,8 +52,8 @@ git checkout -b phase-1/foundation
 
 ## Build phases
 
-Phase 1 (current): Foundation — backend scaffold, frontend scaffold, workspace + daemon scripts
-Phase 2: Orchestrator + Dashboard
+Phase 1: Foundation — backend scaffold, frontend scaffold, workspace + daemon scripts ✓ COMPLETE
+Phase 2 (current): Orchestrator + Dashboard ✓ COMPLETE (branch: phase-2/backend)
 Phase 3: Agent system + personas
 Phase 4: Jobs + Linear integration
 Phase 5: Memory system + analytics
@@ -115,8 +115,59 @@ Phase 5: Memory system + analytics
   right server automatically
 - Never hardcode `http://localhost:PORT` in frontend source code
 
+### Linear API authentication
+
+- Linear personal API keys (`lin_api_...`) use direct key auth — no `Bearer` prefix
+- Header: `Authorization: {api_key}` not `Authorization: Bearer {api_key}`
+- Bearer prefix is for OAuth tokens only
+
 ### 404 handling for settings
 
 - `GET /api/settings/{key}` returns 404 if key not yet saved — this is expected
 - Use `getSettingOrNull()` helper which returns null on 404, throws on other errors
 - Treat null as "not yet configured", not as an error state
+
+### Orchestrator constraints (enforced in code, documented here)
+
+- orchestrator_service.py must never import subprocess, os.system, or os.popen
+- Orchestrator only writes to workspace/\_memory/ — all other workspace writes
+  require user approval
+- Kill switch state stored in settings table as kill_switch_active / kill_switch_activated_at
+- Context compaction triggers at 75% of 200k token window (150k tokens)
+- After compaction: keep last 8 messages + compact summary in DB
+- Compact summary written to workspace/\_memory/stm/current.md
+
+### Notification ordering
+
+- notifications ordered: orchestrator_prioritised DESC, priority DESC, created_at DESC
+- agent_id / session_id / job_id are nullable strings — FK constraints added in Phase 3
+
+### StrEnum for string enums
+
+- Use `StrEnum` (Python 3.11 stdlib) instead of `str, Enum` — ruff UP042 rule enforces this
+- Example: `class NotificationStatus(StrEnum): PENDING = "pending"`
+
+### Orchestrator context loading
+
+- Most recent `is_compact_summary=True` message is injected as a user message followed by
+  an assistant ack: `"Understood. I have the context summary."` — keeps alternating role order
+- All subsequent non-summary messages append after it
+- Anthropic streaming: call `await stream.get_final_message()` inside the `async with` block
+
+### Frontend — WS handlers location
+
+- `useWebSocket` handlers that call `queryClient.invalidateQueries()` must live inside `AppInner`
+  (which is inside `QueryClientProvider`), not in the outer `App` component
+- Access queryClient via `useQueryClient()` hook
+
+### Frontend — Dashboard layout chain
+
+- AppShell `<main>`: `flex-1 h-full overflow-hidden`
+- Dashboard root: `flex flex-col h-full overflow-hidden`
+- This is required so the fixed-height OrchestratorChat stays pinned at the bottom
+  without the outer page scrolling
+
+### Dev tools not in requirements.in
+
+- mypy, ruff, pytest, pytest-asyncio are not tracked in `requirements.in`
+- Install manually into the venv: `.venv/bin/pip install mypy ruff pytest pytest-asyncio`

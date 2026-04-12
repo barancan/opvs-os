@@ -5,6 +5,16 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+# WebSocket event type constants
+WS_KILL_SWITCH_ACTIVATED = "kill_switch_activated"
+WS_KILL_SWITCH_RECOVERED = "kill_switch_recovered"
+WS_CHAT_TOKEN = "chat_token"
+WS_CHAT_COMPLETE = "chat_complete"
+WS_CHAT_ERROR = "chat_error"
+WS_NOTIFICATION_CREATED = "notification_created"
+WS_NOTIFICATION_UPDATED = "notification_updated"
+WS_COMPACT_TRIGGERED = "compact_triggered"
+
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
