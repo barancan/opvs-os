@@ -23,6 +23,8 @@ class ChatMessage(Base):
     is_compact_summary: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    # NULL = global/unscoped, non-null = scoped to a project (no FK yet — added Phase 3)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

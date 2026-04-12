@@ -32,6 +32,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
     alembic_cfg.set_main_option("script_location", "backend/alembic")
     await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
+
+    from opvs.database import AsyncSessionLocal
+    from opvs.services.project_service import ensure_default_project
+    from opvs.services.settings_service import get_setting
+
+    async with AsyncSessionLocal() as db:
+        workspace_setting = await get_setting(db, "workspace_path")
+        wp = str(workspace_setting.value) if workspace_setting else settings.workspace_path
+        await ensure_default_project(db, workspace_path=wp)
+
     yield
 
 

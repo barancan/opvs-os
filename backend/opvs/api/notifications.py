@@ -16,9 +16,12 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 @router.get("", response_model=list[NotificationResponse])
 async def list_notifications(
     status: NotificationStatus | None = Query(default=None),
+    project_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationResponse]:
-    items = await notification_service.list_notifications(db, status=status)
+    items = await notification_service.list_notifications(
+        db, status=status, project_id=project_id
+    )
     return [NotificationResponse.model_validate(item) for item in items]
 
 

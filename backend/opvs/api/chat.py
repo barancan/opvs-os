@@ -10,9 +10,10 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 @router.get("/history", response_model=list[ChatMessageResponse])
 async def get_chat_history(
+    project_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> list[ChatMessageResponse]:
-    messages = await orchestrator_service.get_history(db)
+    messages = await orchestrator_service.get_history(db, project_id=project_id)
     return [ChatMessageResponse.model_validate(m) for m in messages]
 
 
@@ -21,8 +22,11 @@ async def send_chat_message(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
     client_id: str = Query(default="default"),
+    project_id: int | None = Query(default=None),
 ) -> ChatMessageResponse:
-    message = await orchestrator_service.send_message(db, request.content, client_id)
+    message = await orchestrator_service.send_message(
+        db, request.content, client_id, project_id=project_id
+    )
     return ChatMessageResponse.model_validate(message)
 
 
