@@ -9,8 +9,75 @@ import {
   removeLinearLink,
   updateProject,
 } from '@/api/projects'
+import { getProjectSkills, setProjectSkill } from '@/api/skills'
 import { Button } from '@/components/ui/button'
-import type { LinearLink, Project, ProjectUpdate } from '@/types/api'
+import type { LinearLink, Project, ProjectSkill, ProjectUpdate } from '@/types/api'
+
+// ---------------------------------------------------------------------------
+// Skill toggle row
+// ---------------------------------------------------------------------------
+
+function SkillToggleRow({
+  skill,
+  projectId,
+}: {
+  skill: ProjectSkill
+  projectId: number
+}) {
+  const qc = useQueryClient()
+
+  const toggleMutation = useMutation({
+    mutationFn: (enabled: boolean) => setProjectSkill(projectId, skill.skill_id, enabled),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['projectSkills', projectId] })
+    },
+    onError: (err) =>
+      toast.error(`Skill update failed: ${err instanceof Error ? err.message : String(err)}`),
+  })
+
+  const isDisabled =
+    toggleMutation.isPending ||
+    (skill.requires_setting !== null && !skill.setting_configured)
+
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex flex-col">
+        <span className="text-sm text-zinc-200">{skill.display_name}</span>
+        {skill.requires_setting !== null && !skill.setting_configured && (
+          <span className="text-xs text-amber-500">API key not configured — go to Settings</span>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        {skill.always_on ? (
+          <span className="text-xs text-zinc-500">Always on</span>
+        ) : (
+          <button
+            onClick={() => !isDisabled && toggleMutation.mutate(!skill.enabled)}
+            disabled={isDisabled}
+            title={
+              skill.requires_setting !== null && !skill.setting_configured
+                ? 'Configure API key in Settings first'
+                : undefined
+            }
+            className={[
+              'relative w-8 h-4 rounded-full transition-colors',
+              skill.enabled ? 'bg-green-600' : 'bg-zinc-600',
+              isDisabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer',
+            ].join(' ')}
+          >
+            <span
+              className={[
+                'absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform',
+                skill.enabled ? 'translate-x-4' : 'translate-x-0.5',
+              ].join(' ')}
+            />
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Active project card
@@ -24,6 +91,11 @@ function ProjectCard({ project }: { project: Project }) {
   const [showLinkForm, setShowLinkForm] = useState(false)
   const [newLinkId, setNewLinkId] = useState('')
   const [newLinkName, setNewLinkName] = useState('')
+
+  const { data: skills = [] } = useQuery({
+    queryKey: ['projectSkills', project.id],
+    queryFn: () => getProjectSkills(project.id),
+  })
 
   const invalidateProjects = () => {
     void qc.invalidateQueries({ queryKey: ['projects'] })
@@ -211,6 +283,18 @@ function ProjectCard({ project }: { project: Project }) {
           </button>
         )}
       </div>
+
+      {/* Skills */}
+      {skills.length > 0 && (
+        <div className="space-y-2 pt-1">
+          <p className="text-xs font-medium text-zinc-500">Skills</p>
+          <div className="flex flex-col gap-2">
+            {skills.map((skill) => (
+              <SkillToggleRow key={skill.skill_id} skill={skill} projectId={project.id} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

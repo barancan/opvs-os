@@ -6,6 +6,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useAppStore } from '@/stores/useAppStore'
+import type { ToolApprovalRequest } from '@/types/api'
 import Agents from '@/pages/Agents'
 import Analytics from '@/pages/Analytics'
 import Dashboard from '@/pages/Dashboard'
@@ -27,6 +28,9 @@ function AppInner() {
   const setIsStreaming = useAppStore((s) => s.setIsStreaming)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
   const setActiveProjectId = useAppStore((s) => s.setActiveProjectId)
+  const addToolApproval = useAppStore((s) => s.addToolApproval)
+  const updateToolApproval = useAppStore((s) => s.updateToolApproval)
+  const clearToolApprovals = useAppStore((s) => s.clearToolApprovals)
 
   // Bootstrap: ensure activeProjectId always points to a valid active project
   const { data: projects } = useQuery({
@@ -59,7 +63,7 @@ function AppInner() {
     chat_complete: () => {
       setIsStreaming(false)
       clearStreamingContent()
-      // Broad invalidation — matches all ['chatHistory', ...] entries
+      clearToolApprovals()
       void qc.invalidateQueries({ queryKey: ['chatHistory'] })
     },
     chat_error: () => {
@@ -67,11 +71,31 @@ function AppInner() {
       clearStreamingContent()
     },
     notification_created: () => {
-      // Broad invalidation — matches all ['notifications', ...] entries
       void qc.invalidateQueries({ queryKey: ['notifications'] })
     },
     notification_updated: () => {
       void qc.invalidateQueries({ queryKey: ['notifications'] })
+    },
+    tool_approval_required: (payload: unknown) => {
+      const approval = payload as ToolApprovalRequest
+      addToolApproval({ ...approval, status: 'pending' })
+    },
+    tool_result: (payload: unknown) => {
+      const { tool_name, success, content } = payload as {
+        tool_name: string
+        success: boolean
+        content: string
+      }
+      const approvals = useAppStore.getState().toolApprovals
+      const entry = Object.values(approvals).find(
+        (a) => a.tool_name === tool_name && a.status === 'executing',
+      )
+      if (entry) {
+        updateToolApproval(entry.request_id, {
+          status: success ? 'done' : 'failed',
+          result: content,
+        })
+      }
     },
   })
 

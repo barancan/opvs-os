@@ -111,3 +111,30 @@ export interface LinearLinkCreate {
   linear_project_id: string
   linear_project_name: string
 }
+
+// Tool approvals
+export interface ToolApprovalRequest {
+  request_id: string
+  tool_name: string
+  platform: string
+  action: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+export type ToolApprovalStatus = 'pending' | 'approved' | 'rejected' | 'executing' | 'done' | 'failed'
+
+export interface ToolApprovalState extends ToolApprovalRequest {
+  status: ToolApprovalStatus
+  result?: string
+}
+
+// Skills
+export interface ProjectSkill {
+  skill_id: string
+  display_name: string
+  enabled: boolean
+  always_on: boolean
+  requires_setting: string | null
+  setting_configured: boolean
+}

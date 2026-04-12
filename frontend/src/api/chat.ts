@@ -25,3 +25,9 @@ export const clearChatHistory = (): Promise<{ cleared: boolean }> =>
 
 export const getCompactStatus = (): Promise<CompactStatus> =>
   apiClient.get<CompactStatus>('/api/chat/compact')
+
+export const approveToolAction = (requestId: string): Promise<{ status: string; request_id: string }> =>
+  apiClient.post<{ status: string; request_id: string }>(`/api/chat/approve/${requestId}`)
+
+export const rejectToolAction = (requestId: string): Promise<{ status: string; request_id: string }> =>
+  apiClient.post<{ status: string; request_id: string }>(`/api/chat/reject/${requestId}`)
