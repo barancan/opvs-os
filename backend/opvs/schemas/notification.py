@@ -31,6 +31,7 @@ class NotificationCreate(BaseModel):
     session_id: str | None = None
     job_id: str | None = None
     priority: int = 0
+    project_id: int | None = None
 
 
 class NotificationStatusUpdate(BaseModel):

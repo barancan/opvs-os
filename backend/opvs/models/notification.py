@@ -48,3 +48,6 @@ class Notification(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # NULL = global/system notification, appears in all projects
+    # Non-null = scoped to a specific project (no FK yet — added Phase 3)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)

@@ -23,6 +23,7 @@ async def create_notification(
         job_id=data.job_id,
         priority=data.priority,
         status=NotificationStatus.PENDING,
+        project_id=data.project_id,
     )
     db.add(notification)
     await db.flush()
@@ -42,11 +43,17 @@ async def create_notification(
 async def list_notifications(
     db: AsyncSession,
     status: NotificationStatus | None = None,
+    project_id: int | None = None,
     limit: int = 50,
 ) -> list[Notification]:
     query = select(Notification)
     if status is not None:
         query = query.where(Notification.status == status)
+    if project_id is not None:
+        # Show project-scoped notifications AND global (null) notifications
+        query = query.where(
+            (Notification.project_id == project_id) | (Notification.project_id.is_(None))
+        )
     query = query.order_by(
         Notification.orchestrator_prioritised.desc(),
         Notification.priority.desc(),

@@ -84,11 +84,21 @@ async def _get_workspace_path(db: AsyncSession) -> Path:
     return Path(val) if val else Path("./workspace")
 
 
-async def _build_system_prompt(db: AsyncSession) -> str:
+async def _get_stm_path(db: AsyncSession, project_id: int | None) -> "Path":
+    workspace_path = await _get_workspace_path(db)
+    if project_id is not None:
+        from opvs.services import project_service
+
+        project = await project_service.get_project(db, project_id)
+        if project is not None:
+            return workspace_path / "projects" / project.slug / "_memory" / "stm" / "current.md"
+    return workspace_path / "_memory" / "stm" / "current.md"
+
+
+async def _build_system_prompt(db: AsyncSession, project_id: int | None = None) -> str:
     parts = [_STATIC_PREAMBLE]
 
-    workspace_path = await _get_workspace_path(db)
-    stm_file = workspace_path / "_memory" / "stm" / "current.md"
+    stm_file = await _get_stm_path(db, project_id)
     if stm_file.exists():
         stm_content = stm_file.read_text(encoding="utf-8")
         parts.append(f"\n\n## Short-term memory\n\n{stm_content}")
@@ -111,18 +121,30 @@ async def _build_system_prompt(db: AsyncSession) -> str:
     return "".join(parts)
 
 
-async def _load_context_messages(db: AsyncSession) -> list[ChatMessage]:
+async def _load_context_messages(
+    db: AsyncSession, project_id: int | None = None
+) -> list[ChatMessage]:
+    # Build project filter condition
+    project_filter = (
+        ChatMessage.project_id == project_id
+        if project_id is not None
+        else None
+    )
+
     # Find most recent compact summary
-    summary_result = await db.execute(
+    summary_query = (
         select(ChatMessage)
         .where(ChatMessage.is_compact_summary == True)  # noqa: E712
         .order_by(ChatMessage.id.desc())
         .limit(1)
     )
+    if project_filter is not None:
+        summary_query = summary_query.where(project_filter)
+    summary_result = await db.execute(summary_query)
     latest_summary = summary_result.scalar_one_or_none()
 
     if latest_summary is not None:
-        subsequent_result = await db.execute(
+        subsequent_query = (
             select(ChatMessage)
             .where(
                 ChatMessage.id > latest_summary.id,
@@ -131,15 +153,21 @@ async def _load_context_messages(db: AsyncSession) -> list[ChatMessage]:
             .order_by(ChatMessage.id.asc())
             .limit(50)
         )
+        if project_filter is not None:
+            subsequent_query = subsequent_query.where(project_filter)
+        subsequent_result = await db.execute(subsequent_query)
         subsequent = list(subsequent_result.scalars().all())
         return [latest_summary, *subsequent]
     else:
-        result = await db.execute(
+        base_query = (
             select(ChatMessage)
             .where(ChatMessage.is_compact_summary == False)  # noqa: E712
             .order_by(ChatMessage.id.desc())
             .limit(50)
         )
+        if project_filter is not None:
+            base_query = base_query.where(project_filter)
+        result = await db.execute(base_query)
         messages = list(result.scalars().all())
         messages.reverse()
         return messages
@@ -167,10 +195,13 @@ def _build_api_messages(
     return api_messages
 
 
-async def get_history(db: AsyncSession, limit: int = 50) -> list[ChatMessage]:
-    result = await db.execute(
-        select(ChatMessage).order_by(ChatMessage.created_at.asc()).limit(limit)
-    )
+async def get_history(
+    db: AsyncSession, limit: int = 50, project_id: int | None = None
+) -> list[ChatMessage]:
+    query = select(ChatMessage).order_by(ChatMessage.created_at.asc()).limit(limit)
+    if project_id is not None:
+        query = query.where(ChatMessage.project_id == project_id)
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 
@@ -212,6 +243,7 @@ async def send_message(
     db: AsyncSession,
     user_content: str,
     client_id: str,
+    project_id: int | None = None,
 ) -> ChatMessage:
     # 1. Save user message
     user_msg = ChatMessage(
@@ -219,6 +251,7 @@ async def send_message(
         content=user_content,
         token_count=0,
         is_compact_summary=False,
+        project_id=project_id,
     )
     db.add(user_msg)
     await db.flush()
@@ -238,6 +271,7 @@ async def send_message(
             content=refusal,
             token_count=0,
             is_compact_summary=False,
+            project_id=project_id,
         )
         db.add(assistant_msg)
         await db.flush()
@@ -247,13 +281,13 @@ async def send_message(
 
     try:
         # 3. Load history and build messages
-        context_messages = await _load_context_messages(db)
+        context_messages = await _load_context_messages(db, project_id=project_id)
         api_messages = _build_api_messages(context_messages)
         # Append current user message
         api_messages.append({"role": "user", "content": user_content})
 
         # 4. Build system prompt
-        system_prompt = await _build_system_prompt(db)
+        system_prompt = await _build_system_prompt(db, project_id=project_id)
 
         # 5. Get model
         model = await _get_model(db)
@@ -284,6 +318,7 @@ async def send_message(
             content=full_content,
             token_count=output_tokens,
             is_compact_summary=False,
+            project_id=project_id,
         )
         db.add(assistant_msg)
         await db.flush()
@@ -297,7 +332,7 @@ async def send_message(
         )
 
         # 10. Check compaction
-        await _compact_if_needed(db, output_tokens)
+        await _compact_if_needed(db, output_tokens, project_id=project_id)
 
         return assistant_msg
 
@@ -309,6 +344,7 @@ async def send_message(
             content=f"An error occurred: {e}",
             token_count=0,
             is_compact_summary=False,
+            project_id=project_id,
         )
         db.add(error_msg)
         await db.flush()
@@ -316,43 +352,60 @@ async def send_message(
         return error_msg
 
 
-async def _compact_if_needed(db: AsyncSession, last_response_tokens: int) -> bool:
-    summary_result = await db.execute(
+async def _compact_if_needed(
+    db: AsyncSession, last_response_tokens: int, project_id: int | None = None
+) -> bool:
+    project_filter = (
+        ChatMessage.project_id == project_id if project_id is not None else None
+    )
+
+    summary_query = (
         select(ChatMessage)
         .where(ChatMessage.is_compact_summary == True)  # noqa: E712
         .order_by(ChatMessage.id.desc())
         .limit(1)
     )
+    if project_filter is not None:
+        summary_query = summary_query.where(project_filter)
+    summary_result = await db.execute(summary_query)
     latest_summary = summary_result.scalar_one_or_none()
 
     if latest_summary is not None:
-        tokens_result = await db.execute(
-            select(ChatMessage).where(
-                ChatMessage.id > latest_summary.id,
-                ChatMessage.is_compact_summary == False,  # noqa: E712
-            )
+        tokens_query = select(ChatMessage).where(
+            ChatMessage.id > latest_summary.id,
+            ChatMessage.is_compact_summary == False,  # noqa: E712
         )
     else:
-        tokens_result = await db.execute(
-            select(ChatMessage).where(ChatMessage.is_compact_summary == False)  # noqa: E712
+        tokens_query = select(ChatMessage).where(
+            ChatMessage.is_compact_summary == False  # noqa: E712
         )
+    if project_filter is not None:
+        tokens_query = tokens_query.where(project_filter)
+    tokens_result = await db.execute(tokens_query)
 
     messages = list(tokens_result.scalars().all())
     total_tokens = sum(m.token_count for m in messages) + last_response_tokens
 
     if total_tokens >= COMPACT_THRESHOLD_TOKENS:
-        await _run_compaction(db)
+        await _run_compaction(db, project_id=project_id)
         return True
     return False
 
 
-async def _run_compaction(db: AsyncSession) -> None:
+async def _run_compaction(db: AsyncSession, project_id: int | None = None) -> None:
+    project_filter = (
+        ChatMessage.project_id == project_id if project_id is not None else None
+    )
+
     # 1. Load all current non-summary messages
-    all_result = await db.execute(
+    all_query = (
         select(ChatMessage)
         .where(ChatMessage.is_compact_summary == False)  # noqa: E712
         .order_by(ChatMessage.id.asc())
     )
+    if project_filter is not None:
+        all_query = all_query.where(project_filter)
+    all_result = await db.execute(all_query)
     all_messages = list(all_result.scalars().all())
 
     if not all_messages:
@@ -379,11 +432,9 @@ async def _run_compaction(db: AsyncSession) -> None:
             summary_text = block.text
             break
 
-    # 3. Write STM to workspace
-    workspace_path = await _get_workspace_path(db)
-    stm_dir = workspace_path / "_memory" / "stm"
-    stm_dir.mkdir(parents=True, exist_ok=True)
-    stm_file = stm_dir / "current.md"
+    # 3. Write STM to project-scoped or global workspace path
+    stm_file = await _get_stm_path(db, project_id)
+    stm_file.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.utcnow()
     stm_content = f"""# Short-term memory
 *Compacted: {now.isoformat()}*
@@ -399,6 +450,7 @@ async def _run_compaction(db: AsyncSession) -> None:
         content=stm_content,
         token_count=response.usage.output_tokens,
         is_compact_summary=True,
+        project_id=project_id,
     )
     db.add(summary_msg)
     await db.flush()
