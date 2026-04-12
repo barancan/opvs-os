@@ -92,19 +92,7 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
 
   const keyIsSaved = existing !== undefined && existing !== null
 
-  const saveMutation = useMutation({
-    mutationFn: () => upsertSetting(settingKey, { value: inputValue, is_secret: true }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['setting', settingKey] })
-      setInputValue('')
-      setConnectionStatus(service, { status: 'untested' })
-      toast.success('Saved')
-    },
-    onError: (err) => {
-      toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`)
-    },
-  })
-
+  // testMutation defined first so saveMutation.onSuccess can trigger it
   const testMutation = useMutation({
     mutationFn: () => testConnection(service),
     onSuccess: (result) => {
@@ -121,6 +109,20 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
     },
   })
 
+  const saveMutation = useMutation({
+    mutationFn: () => upsertSetting(settingKey, { value: inputValue, is_secret: true }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['setting', settingKey] })
+      setInputValue('')
+      setConnectionStatus(service, { status: 'untested' })
+      toast.success('Saved')
+      testMutation.mutate()
+    },
+    onError: (err) => {
+      toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`)
+    },
+  })
+
   const connState = connectionStatuses[service] ?? { status: 'untested' as const }
 
   return (
@@ -132,14 +134,13 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
           type="password"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          placeholder="Enter API key to update"
+          placeholder={
+            keyIsSaved
+              ? 'API key saved — enter new value to replace'
+              : 'Enter API key'
+          }
           autoComplete="new-password"
         />
-        {keyIsSaved && (
-          <p className="text-xs text-zinc-500">
-            A key is already saved. Enter a new value to replace it.
-          </p>
-        )}
       </div>
       <div className="flex items-center gap-3">
         <Button
@@ -154,7 +155,7 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
           size="sm"
           variant="outline"
           onClick={() => testMutation.mutate()}
-          disabled={testMutation.isPending}
+          disabled={testMutation.isPending || saveMutation.isPending}
         >
           {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Test Connection
