@@ -16,7 +16,7 @@ async def get_chat_history(
     return [ChatMessageResponse.model_validate(m) for m in messages]
 
 
-@router.post("/", response_model=ChatMessageResponse)
+@router.post("", response_model=ChatMessageResponse)
 async def send_chat_message(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),

@@ -13,7 +13,7 @@ from opvs.services import notification_service
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 
-@router.get("/", response_model=list[NotificationResponse])
+@router.get("", response_model=list[NotificationResponse])
 async def list_notifications(
     status: NotificationStatus | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
@@ -22,7 +22,7 @@ async def list_notifications(
     return [NotificationResponse.model_validate(item) for item in items]
 
 
-@router.post("/", response_model=NotificationResponse)
+@router.post("", response_model=NotificationResponse)
 async def create_notification(
     data: NotificationCreate,
     db: AsyncSession = Depends(get_db),

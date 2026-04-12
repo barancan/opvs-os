@@ -55,7 +55,7 @@ async def test_send_chat_message_mocked(client: AsyncClient) -> None:
         return_value=mock_client_instance,
     ):
         response = await client.post(
-            "/api/chat/",
+            "/api/chat",
             json={"content": "Hello orchestrator"},
             params={"client_id": "test-client"},
         )
