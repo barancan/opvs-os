@@ -4,6 +4,7 @@ import { MoreHorizontalIcon, SendIcon, Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { clearChatHistory, getChatHistory, getCompactStatus, sendMessage } from '@/api/chat'
 import { Button } from '@/components/ui/button'
+import { wsClientId } from '@/lib/wsClientId'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/useAppStore'
 import type { ChatMessage } from '@/types/api'
@@ -86,8 +87,18 @@ function StreamingBubble({ content }: { content: string }) {
         OS
       </div>
       <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-zinc-800 px-3 py-2 text-sm text-zinc-200 whitespace-pre-wrap">
-        {content}
-        <span className="inline-block w-1 h-3 bg-zinc-400 animate-pulse ml-0.5 align-middle" />
+        {content ? (
+          <>
+            {content}
+            <span className="inline-block w-1 h-3 bg-zinc-400 animate-pulse ml-0.5 align-middle" />
+          </>
+        ) : (
+          <div className="flex gap-1 items-center py-0.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:150ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:300ms]" />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -99,7 +110,6 @@ function StreamingBubble({ content }: { content: string }) {
 
 export function OrchestratorChat() {
   const qc = useQueryClient()
-  const clientId = useRef(crypto.randomUUID())
   const [input, setInput] = useState('')
   const [showMenu, setShowMenu] = useState(false)
   const [compactIndicators, setCompactIndicators] = useState<number[]>([])
@@ -144,7 +154,7 @@ export function OrchestratorChat() {
   }, [showMenu])
 
   const sendMutation = useMutation({
-    mutationFn: (content: string) => sendMessage(content, clientId.current),
+    mutationFn: (content: string) => sendMessage(content, wsClientId),
     onMutate: (content: string) => {
       // Show user message immediately without waiting for the server round-trip
       clearStreamingContent()
