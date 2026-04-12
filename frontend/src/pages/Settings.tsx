@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { activateKillSwitch, getKillSwitchStatus, recoverKillSwitch } from '@/api/killswitch'
 import { getSettingOrNull, testConnection, upsertSetting } from '@/api/settings'
 import { ConnectionBadge } from '@/components/shared/ConnectionBadge'
+import { SystemPromptModal } from '@/components/settings/SystemPromptModal'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -262,24 +263,49 @@ function OllamaRow() {
 
 function OrchestratorSection() {
   const qc = useQueryClient()
-  const [value, setValue] = useState('')
+  const [modelValue, setModelValue] = useState('')
+  const [contextWindow, setContextWindow] = useState('8192')
+  const [promptModalOpen, setPromptModalOpen] = useState(false)
 
-  const { data } = useQuery({
+  const { data: modelData } = useQuery({
     queryKey: ['setting', 'orchestrator_model'],
     queryFn: () => getSettingOrNull('orchestrator_model'),
   })
 
-  useEffect(() => {
-    if (data !== undefined) {
-      setValue(data?.value ?? '')
-    }
-  }, [data])
+  const { data: contextWindowData } = useQuery({
+    queryKey: ['setting', 'ollama_context_window'],
+    queryFn: () => getSettingOrNull('ollama_context_window'),
+  })
 
-  const mutation = useMutation({
+  useEffect(() => {
+    if (modelData !== undefined) {
+      setModelValue(modelData?.value ?? '')
+    }
+  }, [modelData])
+
+  useEffect(() => {
+    if (contextWindowData !== undefined) {
+      setContextWindow(contextWindowData?.value ?? '8192')
+    }
+  }, [contextWindowData])
+
+  const modelMutation = useMutation({
     mutationFn: () =>
-      upsertSetting('orchestrator_model', { value, is_secret: false }),
+      upsertSetting('orchestrator_model', { value: modelValue, is_secret: false }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['setting', 'orchestrator_model'] })
+      toast.success('Saved')
+    },
+    onError: (err) => {
+      toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`)
+    },
+  })
+
+  const contextWindowMutation = useMutation({
+    mutationFn: () =>
+      upsertSetting('ollama_context_window', { value: contextWindow, is_secret: false }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['setting', 'ollama_context_window'] })
       toast.success('Saved')
     },
     onError: (err) => {
@@ -292,24 +318,85 @@ function OrchestratorSection() {
       <CardHeader>
         <CardTitle>Orchestrator</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="orchestrator_model">Orchestrator Model</Label>
-          <Input
-            id="orchestrator_model"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="claude-sonnet-4-6"
-          />
-          <p className="text-xs text-muted-foreground">
-            Default: claude-sonnet-4-6. Must be a valid Anthropic model ID.
+      <CardContent className="flex flex-col gap-6">
+
+        {/* Model name */}
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="orchestrator_model">Model</Label>
+          <div className="flex gap-2">
+            <Input
+              id="orchestrator_model"
+              value={modelValue}
+              onChange={(e) => setModelValue(e.target.value)}
+              placeholder="claude-sonnet-4-6"
+              className="flex-1"
+            />
+            <Button
+              variant="outline"
+              onClick={() => modelMutation.mutate()}
+              disabled={modelMutation.isPending}
+            >
+              {modelMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Default: claude-sonnet-4-6. Use any Anthropic model ID or an Ollama model name
+            (e.g. gemma3:4b). Ollama models route to your local Ollama instance.
           </p>
         </div>
-        <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-          {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Save
-        </Button>
+
+        {/* Ollama context window */}
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="ollama-context-window">Ollama context window (tokens)</Label>
+          <div className="flex gap-2">
+            <Input
+              id="ollama-context-window"
+              type="number"
+              min={1024}
+              max={131072}
+              step={1024}
+              value={contextWindow}
+              onChange={(e) => setContextWindow(e.target.value)}
+              className="w-40"
+            />
+            <Button
+              variant="outline"
+              onClick={() => contextWindowMutation.mutate()}
+              disabled={contextWindowMutation.isPending}
+            >
+              {contextWindowMutation.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Save
+            </Button>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Context window size for local Ollama models. Compaction triggers at 75% of this
+            value. Default: 8192.
+          </p>
+        </div>
+
+        {/* System prompt */}
+        <div className="flex flex-col gap-2">
+          <Label>System prompt</Label>
+          <p className="text-xs text-zinc-500">
+            The static instructions sent to the orchestrator. Dynamic context (memory, project
+            state, notifications) is always appended automatically.
+          </p>
+          <div>
+            <Button variant="outline" onClick={() => setPromptModalOpen(true)}>
+              Edit system prompt
+            </Button>
+          </div>
+        </div>
+
       </CardContent>
+
+      <SystemPromptModal
+        open={promptModalOpen}
+        onClose={() => setPromptModalOpen(false)}
+      />
     </Card>
   )
 }

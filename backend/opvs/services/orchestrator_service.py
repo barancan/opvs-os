@@ -1,8 +1,12 @@
+import json
 import logging
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import anthropic
+import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +28,27 @@ COMPACT_THRESHOLD = 0.75
 COMPACT_THRESHOLD_TOKENS = int(CONTEXT_WINDOW_TOKENS * COMPACT_THRESHOLD)  # 150_000
 HISTORY_MESSAGES_AFTER_COMPACT = 8
 
-_STATIC_PREAMBLE = """\
+# ---------------------------------------------------------------------------
+# Custom exceptions
+# ---------------------------------------------------------------------------
+
+
+class OllamaUnreachableError(Exception):
+    """Raised when Ollama host cannot be reached."""
+    pass
+
+
+class AnthropicQuotaExceededError(Exception):
+    """Raised when Anthropic returns a rate limit or quota error.
+    Operations must halt — do not fall back to another paid service."""
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Preambles
+# ---------------------------------------------------------------------------
+
+ANTHROPIC_PREAMBLE_DEFAULT = """\
 You are the opvs OS orchestrator. You are a PM assistant that helps manage \
 agents, tasks, and information for a product manager's daily work.
 
@@ -42,8 +66,23 @@ agents, tasks, and information for a product manager's daily work.
 - Create notifications to capture important information
 
 ## Memory
-Your short-term memory summary (if available) is included below in the system context.
-Always read it before responding — it contains context from previous sessions.\
+Your short-term memory summary and project context are included below.
+Always read them before responding.\
+"""
+
+OLLAMA_PREAMBLE_DEFAULT = """\
+You are the opvs OS orchestrator, a PM assistant.
+
+Hard limits (never violate):
+- No shell commands
+- No file writes outside workspace/_memory/ without user approval
+- No direct external API calls
+- If kill switch is active: refuse new tasks, explain why
+
+You can: answer questions about system state, trigger kill switch on request,
+help with PM thinking, create notifications.
+
+Your project context and memory summary are below. Read them before responding.\
 """
 
 _COMPACTION_PROMPT_TEMPLATE = """\
@@ -60,6 +99,11 @@ Keep it under 800 tokens. Do not include pleasantries or meta-commentary.
 Conversation to summarize:
 {messages}\
 """
+
+
+# ---------------------------------------------------------------------------
+# Settings helpers
+# ---------------------------------------------------------------------------
 
 
 async def _get_setting_value(db: AsyncSession, key: str) -> str:
@@ -95,6 +139,47 @@ async def _get_stm_path(db: AsyncSession, project_id: int | None) -> "Path":
     return workspace_path / "_memory" / "stm" / "current.md"
 
 
+# ---------------------------------------------------------------------------
+# Provider detection
+# ---------------------------------------------------------------------------
+
+
+def _detect_provider(model: str) -> Literal["anthropic", "ollama"]:
+    """Determine which provider to use based on model name.
+    All Anthropic models start with 'claude-'. Everything else routes to Ollama.
+    """
+    if model.startswith("claude-"):
+        return "anthropic"
+    return "ollama"
+
+
+# ---------------------------------------------------------------------------
+# Preamble loading
+# ---------------------------------------------------------------------------
+
+
+async def _load_preamble(db: AsyncSession, provider: str) -> str:
+    """Load user-edited preamble from DB, fall back to hardcoded default."""
+    key = (
+        "orchestrator_preamble_anthropic"
+        if provider == "anthropic"
+        else "orchestrator_preamble_ollama"
+    )
+    value = await _get_setting_value(db, key)
+    if value and value.strip():
+        return value.strip()
+    return (
+        ANTHROPIC_PREAMBLE_DEFAULT
+        if provider == "anthropic"
+        else OLLAMA_PREAMBLE_DEFAULT
+    )
+
+
+# ---------------------------------------------------------------------------
+# System prompt builder
+# ---------------------------------------------------------------------------
+
+
 async def _get_project_for_prompt(
     db: AsyncSession, project_id: int
 ) -> "tuple[str, str] | None":
@@ -110,11 +195,16 @@ async def _get_project_for_prompt(
     return (project.name, project.slug)
 
 
-async def _build_system_prompt(db: AsyncSession, project_id: int | None = None) -> str:
+async def _build_system_prompt(
+    db: AsyncSession,
+    project_id: int | None = None,
+    provider: str = "anthropic",
+) -> str:
     workspace_path = await _get_workspace_path(db)
-    sections: list[str] = [_STATIC_PREAMBLE]
+    preamble = await _load_preamble(db, provider)
+    sections: list[str] = [preamble]
 
-    # 1. Global memory index — orients the orchestrator to what cross-project memory exists
+    # 1. Global memory index
     global_index = workspace_path / "_memory" / "INDEX.md"
     if global_index.exists():
         content = global_index.read_text(encoding="utf-8").strip()
@@ -129,11 +219,9 @@ async def _build_system_prompt(db: AsyncSession, project_id: int | None = None) 
                 f"## Active project\n\nName: {project_name}\nSlug: {project_slug}"
             )
 
-            # Project CONTEXT.md — agent instructions for this project
             context_file = workspace_path / "projects" / project_slug / "CONTEXT.md"
             if context_file.exists():
                 raw = context_file.read_text(encoding="utf-8").strip()
-                # Strip the READ-ONLY header line before injecting
                 body = "\n".join(
                     line for line in raw.splitlines()
                     if not line.startswith("# READ-ONLY")
@@ -141,7 +229,6 @@ async def _build_system_prompt(db: AsyncSession, project_id: int | None = None) 
                 if body:
                     sections.append(f"## Project context\n\n{body}")
 
-            # Project memory index
             project_index = (
                 workspace_path / "projects" / project_slug / "_memory" / "INDEX.md"
             )
@@ -149,7 +236,6 @@ async def _build_system_prompt(db: AsyncSession, project_id: int | None = None) 
                 content = project_index.read_text(encoding="utf-8").strip()
                 sections.append(f"## Project memory index\n\n{content}")
 
-            # Project STM (most recent compact summary)
             stm_file = await _get_stm_path(db, project_id)
             if stm_file.exists():
                 content = stm_file.read_text(encoding="utf-8").strip()
@@ -181,17 +267,20 @@ async def _build_system_prompt(db: AsyncSession, project_id: int | None = None) 
     return "\n\n---\n\n".join(sections)
 
 
+# ---------------------------------------------------------------------------
+# Message history
+# ---------------------------------------------------------------------------
+
+
 async def _load_context_messages(
     db: AsyncSession, project_id: int | None = None
 ) -> list[ChatMessage]:
-    # Build project filter condition
     project_filter = (
         ChatMessage.project_id == project_id
         if project_id is not None
         else None
     )
 
-    # Find most recent compact summary
     summary_query = (
         select(ChatMessage)
         .where(ChatMessage.is_compact_summary == True)  # noqa: E712
@@ -244,8 +333,6 @@ def _build_api_messages(
                 {"role": "assistant", "content": "Understood. I have the context summary."}
             )
         else:
-            # Only USER and ASSISTANT roles reach the API; SYSTEM is only used for
-            # compact summaries handled above. We assert the literal type here.
             assert msg.role in (MessageRole.USER, MessageRole.ASSISTANT)
             api_role: anthropic.types.MessageParam = {
                 "role": "user" if msg.role == MessageRole.USER else "assistant",
@@ -253,6 +340,172 @@ def _build_api_messages(
             }
             api_messages.append(api_role)
     return api_messages
+
+
+# ---------------------------------------------------------------------------
+# Provider streaming
+# ---------------------------------------------------------------------------
+
+
+async def _stream_anthropic(
+    model: str,
+    messages: list[anthropic.types.MessageParam],
+    system: str,
+    api_key: str,
+) -> AsyncGenerator[tuple[str, int, int], None]:
+    """Stream tokens from Anthropic. Yields (token, input_tokens, output_tokens).
+    input_tokens and output_tokens are 0 for intermediate chunks, populated on final.
+    Raises AnthropicQuotaExceededError on rate limit / quota errors.
+    """
+    client = anthropic.AsyncAnthropic(api_key=api_key if api_key else None)
+
+    try:
+        async with client.messages.stream(
+            model=model,
+            max_tokens=4096,
+            system=system,
+            messages=messages,
+        ) as stream:
+            async for text in stream.text_stream:
+                yield (text, 0, 0)
+            final = await stream.get_final_message()
+            input_tokens = final.usage.input_tokens
+            output_tokens = final.usage.output_tokens
+            yield ("", input_tokens, output_tokens)
+
+    except anthropic.RateLimitError as e:
+        raise AnthropicQuotaExceededError(
+            f"Anthropic rate limit exceeded: {e}"
+        ) from e
+    except anthropic.APIStatusError as e:
+        if e.status_code in (429, 529):
+            raise AnthropicQuotaExceededError(
+                f"Anthropic quota exceeded (HTTP {e.status_code}): {e}"
+            ) from e
+        raise
+
+
+async def _stream_ollama(
+    model: str,
+    messages: list[anthropic.types.MessageParam],
+    system: str,
+    ollama_host: str,
+) -> AsyncGenerator[tuple[str, int, int], None]:
+    """Stream tokens from Ollama. Yields (token, input_tokens, output_tokens).
+    Raises OllamaUnreachableError if the host cannot be reached.
+    """
+    full_messages: list[dict[str, str]] = []
+    if system:
+        full_messages.append({"role": "system", "content": system})
+    for msg in messages:
+        full_messages.append({
+            "role": str(msg["role"]),
+            "content": str(msg["content"]),
+        })
+
+    url = f"{ollama_host.rstrip('/')}/api/chat"
+    payload = {
+        "model": model,
+        "messages": full_messages,
+        "stream": True,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", url, json=payload) as response:
+                response.raise_for_status()
+                input_tokens = 0
+                output_tokens = 0
+
+                async for raw_line in response.aiter_lines():
+                    if not raw_line.strip():
+                        continue
+                    try:
+                        data = json.loads(raw_line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if not data.get("done", False):
+                        token = data.get("message", {}).get("content", "")
+                        if token:
+                            yield (token, 0, 0)
+                    else:
+                        input_tokens = data.get("prompt_eval_count", 0)
+                        output_tokens = data.get("eval_count", 0)
+                        yield ("", input_tokens, output_tokens)
+
+    except httpx.ConnectError as e:
+        raise OllamaUnreachableError(
+            f"Cannot reach Ollama at {ollama_host}: {e}"
+        ) from e
+    except httpx.TimeoutException as e:
+        raise OllamaUnreachableError(
+            f"Ollama request timed out at {ollama_host}: {e}"
+        ) from e
+    except httpx.HTTPStatusError as e:
+        raise OllamaUnreachableError(
+            f"Ollama returned HTTP {e.response.status_code}: {e}"
+        ) from e
+
+
+async def _stream_tokens(
+    model: str,
+    messages: list[anthropic.types.MessageParam],
+    system: str,
+    db: AsyncSession,
+) -> AsyncGenerator[tuple[str, int, int], None]:
+    """Route to the correct provider and handle fallback.
+
+    Fallback rules:
+    - Ollama unreachable → warn, fall back to claude-sonnet-4-6, yield a
+      prefix token "[Ollama unavailable — responding via Claude]\\n\\n"
+    - Anthropic quota exceeded → raise (caller must halt, not fall back)
+    """
+    provider = _detect_provider(model)
+
+    if provider == "ollama":
+        ollama_host = await _get_setting_value(db, "ollama_host") or "http://localhost:11434"
+        try:
+            async for item in _stream_ollama(model, messages, system, ollama_host):
+                yield item
+            return
+        except OllamaUnreachableError as e:
+            fallback_model = ORCHESTRATOR_MODEL_DEFAULT
+            warning_msg = (
+                f"[Ollama unavailable ({model}) — responding via {fallback_model}]\n\n"
+            )
+            yield (warning_msg, 0, 0)
+
+            from opvs.models.notification import NotificationSourceType
+            from opvs.schemas.notification import NotificationCreate
+            from opvs.services.notification_service import create_notification
+
+            await create_notification(
+                db,
+                NotificationCreate(
+                    title="Ollama unavailable",
+                    body=(
+                        f"Could not reach Ollama ({model}). "
+                        f"Fell back to {fallback_model}. Error: {str(e)[:200]}"
+                    ),
+                    source_type=NotificationSourceType.SYSTEM,
+                ),
+            )
+
+            api_key = await _get_setting_value(db, "anthropic_api_key") or ""
+            fallback_system = await _build_system_prompt(db, provider="anthropic")
+            async for item in _stream_anthropic(fallback_model, messages, fallback_system, api_key):
+                yield item
+
+    else:
+        api_key = await _get_setting_value(db, "anthropic_api_key") or ""
+        async for item in _stream_anthropic(model, messages, system, api_key):
+            yield item
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 async def get_history(
@@ -296,7 +549,21 @@ async def get_compact_status(db: AsyncSession) -> tuple[int, int, bool]:
 
     total = sum(m.token_count for m in messages)
     compacted = latest_summary is not None
-    return total, COMPACT_THRESHOLD_TOKENS, compacted
+
+    # Dynamic threshold based on current model/provider
+    model = await _get_model(db)
+    provider = _detect_provider(model)
+    if provider == "ollama":
+        window_str = await _get_setting_value(db, "ollama_context_window") or "8192"
+        try:
+            context_window = int(window_str)
+        except ValueError:
+            context_window = 8192
+        threshold = int(context_window * COMPACT_THRESHOLD)
+    else:
+        threshold = COMPACT_THRESHOLD_TOKENS
+
+    return total, threshold, compacted
 
 
 async def send_message(
@@ -343,40 +610,66 @@ async def send_message(
         # 3. Load history and build messages
         context_messages = await _load_context_messages(db, project_id=project_id)
         api_messages = _build_api_messages(context_messages)
-        # Append current user message
         api_messages.append({"role": "user", "content": user_content})
 
-        # 4. Build system prompt
-        system_prompt = await _build_system_prompt(db, project_id=project_id)
-
-        # 5. Get model
+        # 4. Get model and build system prompt
         model = await _get_model(db)
+        provider = _detect_provider(model)
+        system_prompt = await _build_system_prompt(db, project_id=project_id, provider=provider)
 
-        # 6. Get API key
-        api_key = await _get_setting_value(db, "anthropic_api_key")
-        client = anthropic.AsyncAnthropic(api_key=api_key if api_key else None)
-
-        # 7. Stream response
+        # 5. Stream tokens
         full_content = ""
+        input_tokens = 0
         output_tokens = 0
 
-        async with client.messages.stream(
-            model=model,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=api_messages,
-        ) as stream:
-            async for text in stream.text_stream:
-                full_content += text
-                await manager.send_to(client_id, WS_CHAT_TOKEN, {"token": text})
-            final_message = await stream.get_final_message()
-            output_tokens = final_message.usage.output_tokens
+        try:
+            async for token, in_tok, out_tok in _stream_tokens(model, api_messages, system_prompt, db):
+                if token:
+                    full_content += token
+                    await manager.send_to(client_id, WS_CHAT_TOKEN, {"token": token})
+                if in_tok or out_tok:
+                    input_tokens = in_tok
+                    output_tokens = out_tok
 
-        # 8. Save assistant response
+        except AnthropicQuotaExceededError as e:
+            quota_error_text = (
+                "⚠ Anthropic quota exceeded. Operations halted. "
+                "Check your API usage at console.anthropic.com."
+            )
+            await manager.send_to(client_id, WS_CHAT_ERROR, {"error": quota_error_text})
+
+            from opvs.models.notification import NotificationSourceType
+            from opvs.schemas.notification import NotificationCreate
+            from opvs.services.notification_service import create_notification
+
+            await create_notification(
+                db,
+                NotificationCreate(
+                    title="Anthropic quota exceeded — operations halted",
+                    body=str(e)[:500],
+                    source_type=NotificationSourceType.SYSTEM,
+                    priority=10,
+                ),
+            )
+
+            error_record = ChatMessage(
+                role=MessageRole.ASSISTANT,
+                content=quota_error_text,
+                token_count=0,
+                is_compact_summary=False,
+                project_id=project_id,
+            )
+            db.add(error_record)
+            await db.flush()
+            await db.refresh(error_record)
+            return error_record
+
+        # 6. Save assistant response
+        total_tokens = input_tokens + output_tokens
         assistant_msg = ChatMessage(
             role=MessageRole.ASSISTANT,
             content=full_content,
-            token_count=output_tokens,
+            token_count=total_tokens,
             is_compact_summary=False,
             project_id=project_id,
         )
@@ -384,15 +677,15 @@ async def send_message(
         await db.flush()
         await db.refresh(assistant_msg)
 
-        # 9. Broadcast complete
+        # 7. Broadcast complete
         await manager.send_to(
             client_id,
             WS_CHAT_COMPLETE,
-            {"message_id": assistant_msg.id, "token_count": output_tokens},
+            {"message_id": assistant_msg.id, "token_count": total_tokens},
         )
 
-        # 10. Check compaction
-        await _compact_if_needed(db, output_tokens, project_id=project_id)
+        # 8. Check compaction
+        await _compact_if_needed(db, total_tokens, project_id=project_id)
 
         return assistant_msg
 
@@ -412,12 +705,30 @@ async def send_message(
         return error_msg
 
 
+# ---------------------------------------------------------------------------
+# Compaction
+# ---------------------------------------------------------------------------
+
+
 async def _compact_if_needed(
     db: AsyncSession, last_response_tokens: int, project_id: int | None = None
 ) -> bool:
     project_filter = (
         ChatMessage.project_id == project_id if project_id is not None else None
     )
+
+    # Determine threshold based on current model/provider
+    model = await _get_model(db)
+    provider = _detect_provider(model)
+    if provider == "ollama":
+        window_str = await _get_setting_value(db, "ollama_context_window") or "8192"
+        try:
+            context_window = int(window_str)
+        except ValueError:
+            context_window = 8192
+        threshold = int(context_window * COMPACT_THRESHOLD)
+    else:
+        threshold = COMPACT_THRESHOLD_TOKENS
 
     summary_query = (
         select(ChatMessage)
@@ -446,7 +757,7 @@ async def _compact_if_needed(
     messages = list(tokens_result.scalars().all())
     total_tokens = sum(m.token_count for m in messages) + last_response_tokens
 
-    if total_tokens >= COMPACT_THRESHOLD_TOKENS:
+    if total_tokens >= threshold:
         await _run_compaction(db, project_id=project_id)
         return True
     return False
@@ -475,22 +786,42 @@ async def _run_compaction(db: AsyncSession, project_id: int | None = None) -> No
         f"{m.role.value.upper()}: {m.content}" for m in all_messages
     )
     compaction_prompt = _COMPACTION_PROMPT_TEMPLATE.format(messages=conversation_text)
+    compaction_messages: list[anthropic.types.MessageParam] = [
+        {"role": "user", "content": compaction_prompt}
+    ]
 
-    # 2. Call Claude for compaction summary
+    # 2. Use same model as orchestrator
     model = await _get_model(db)
-    api_key = await _get_setting_value(db, "anthropic_api_key")
-    client = anthropic.AsyncAnthropic(api_key=api_key if api_key else None)
+    provider = _detect_provider(model)
 
-    response = await client.messages.create(
-        model=model,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": compaction_prompt}],
-    )
     summary_text = ""
-    for block in response.content:
-        if isinstance(block, anthropic.types.TextBlock):
-            summary_text = block.text
-            break
+    summary_tokens = 0
+
+    if provider == "ollama":
+        ollama_host = await _get_setting_value(db, "ollama_host") or "http://localhost:11434"
+        try:
+            async for token, _, out_tok in _stream_ollama(
+                model, compaction_messages, "", ollama_host
+            ):
+                summary_text += token
+                if out_tok:
+                    summary_tokens = out_tok
+        except OllamaUnreachableError:
+            # Skip compaction silently if Ollama is down — will retry next time
+            return
+    else:
+        api_key = await _get_setting_value(db, "anthropic_api_key") or ""
+        client = anthropic.AsyncAnthropic(api_key=api_key if api_key else None)
+        response = await client.messages.create(
+            model=model,
+            max_tokens=1024,
+            messages=compaction_messages,
+        )
+        for block in response.content:
+            if isinstance(block, anthropic.types.TextBlock):
+                summary_text = block.text
+                break
+        summary_tokens = response.usage.output_tokens
 
     # 3. Write STM to project-scoped or global workspace path
     stm_file = await _get_stm_path(db, project_id)
@@ -508,7 +839,7 @@ async def _run_compaction(db: AsyncSession, project_id: int | None = None) -> No
     summary_msg = ChatMessage(
         role=MessageRole.SYSTEM,
         content=stm_content,
-        token_count=response.usage.output_tokens,
+        token_count=summary_tokens,
         is_compact_summary=True,
         project_id=project_id,
     )
