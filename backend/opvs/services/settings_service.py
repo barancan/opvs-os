@@ -87,7 +87,9 @@ async def test_connection(service: str, db: AsyncSession) -> ConnectionTestResul
                     "https://api.linear.app/graphql",
                     json={"query": "{ viewer { id } }"},
                     headers={
-                        "Authorization": f"Bearer {api_key}",
+                        # Linear personal API keys are passed directly (no Bearer prefix).
+                        # OAuth tokens use Bearer — but personal keys get a 400 with it.
+                        "Authorization": api_key,
                         "Content-Type": "application/json",
                     },
                 )

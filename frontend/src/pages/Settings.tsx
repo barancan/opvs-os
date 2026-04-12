@@ -82,6 +82,7 @@ interface SecretKeyRowProps {
 function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
   const qc = useQueryClient()
   const [inputValue, setInputValue] = useState('')
+  const [isEditing, setIsEditing] = useState(false)
   const connectionStatuses = useAppStore((s) => s.connectionStatuses)
   const setConnectionStatus = useAppStore((s) => s.setConnectionStatus)
 
@@ -114,6 +115,7 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['setting', settingKey] })
       setInputValue('')
+      setIsEditing(false)
       setConnectionStatus(service, { status: 'untested' })
       toast.success('Saved')
       testMutation.mutate()
@@ -125,6 +127,12 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
 
   const connState = connectionStatuses[service] ?? { status: 'untested' as const }
 
+  // When a key is saved and the user isn't actively editing, show a dummy
+  // masked value so the field looks populated (password field renders any
+  // character as a dot, so 16 bullets → 16 dots).
+  const SAVED_MASK = '••••••••••••••••'
+  const displayValue = keyIsSaved && !isEditing ? SAVED_MASK : inputValue
+
   return (
     <div className="space-y-3">
       <div className="space-y-2">
@@ -132,13 +140,18 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
         <Input
           id={settingKey}
           type="password"
-          value={inputValue}
+          value={displayValue}
+          onFocus={() => {
+            if (keyIsSaved && !isEditing) {
+              setIsEditing(true)
+              setInputValue('')
+            }
+          }}
+          onBlur={() => {
+            if (!inputValue) setIsEditing(false)
+          }}
           onChange={(e) => setInputValue(e.target.value)}
-          placeholder={
-            keyIsSaved
-              ? 'API key saved — enter new value to replace'
-              : 'Enter API key'
-          }
+          placeholder="Enter API key"
           autoComplete="new-password"
         />
       </div>
@@ -146,7 +159,7 @@ function SecretKeyRow({ settingKey, label, service }: SecretKeyRowProps) {
         <Button
           size="sm"
           onClick={() => saveMutation.mutate()}
-          disabled={saveMutation.isPending || !inputValue}
+          disabled={saveMutation.isPending || !isEditing || !inputValue}
         >
           {saveMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Save

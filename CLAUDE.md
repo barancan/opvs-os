@@ -62,6 +62,19 @@ Phase 5: Memory system + analytics
 
 ## Known implementation decisions (do not change these)
 
+### Settings service — test_connection
+
+- Must accept `db: AsyncSession` and read API keys from the database, not from the
+  pydantic Settings singleton — the singleton reads from environment variables which
+  are empty until restart; saved keys live in SQLite
+- Always cast retrieved DB values with explicit `str()` before use in HTTP headers
+  to prevent bytes-vs-string bugs
+
+### Connection status persistence
+
+- Connection test results (ok/error/untested per service) live in Zustand, not in
+  local component state — they must survive navigation away from Settings
+
 ### Node / Vite
 
 - Vite is pinned to v5 (`vite@5`) — Vite 8 requires Node 20.19+ which may not be present
@@ -93,3 +106,17 @@ Phase 5: Memory system + analytics
 
 - Set `script_location` and `sqlalchemy.url` programmatically in `main.py`, not via `alembic.ini`
 - This ensures paths resolve correctly when uvicorn runs from the project root
+
+### API client URL strategy
+
+- `client.ts` BASE_URL must be `''` (empty string) — always use relative URLs
+- Vite proxy handles `/api` and `/ws` in dev mode
+- FastAPI serves both API and static files in production — relative URLs hit the
+  right server automatically
+- Never hardcode `http://localhost:PORT` in frontend source code
+
+### 404 handling for settings
+
+- `GET /api/settings/{key}` returns 404 if key not yet saved — this is expected
+- Use `getSettingOrNull()` helper which returns null on 404, throws on other errors
+- Treat null as "not yet configured", not as an error state
