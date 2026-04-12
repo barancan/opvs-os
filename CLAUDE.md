@@ -53,8 +53,10 @@ git checkout -b phase-1/foundation
 ## Build phases
 
 Phase 1: Foundation — backend scaffold, frontend scaffold, workspace + daemon scripts ✓ COMPLETE
-Phase 2 (current): Orchestrator + Dashboard ✓ COMPLETE (branch: phase-2/backend)
-Phase 3: Agent system + personas
+Phase 2: Orchestrator + Dashboard ✓ COMPLETE
+Phase 2.5: Projects (backend + frontend) ✓ COMPLETE
+Phase 2.5+: Ollama provider support + editable system prompts ✓ COMPLETE (branch: phase-3/ollama-orchestrator-support)
+Phase 3 (next): Agent system + personas
 Phase 4: Jobs + Linear integration
 Phase 5: Memory system + analytics
 
@@ -133,9 +135,11 @@ Phase 5: Memory system + analytics
 - Orchestrator only writes to workspace/\_memory/ — all other workspace writes
   require user approval
 - Kill switch state stored in settings table as kill_switch_active / kill_switch_activated_at
-- Context compaction triggers at 75% of 200k token window (150k tokens)
+- Context compaction triggers at 75% of context window:
+  - Anthropic: 200k tokens → threshold 150k
+  - Ollama: reads `ollama_context_window` setting (default 8192) → threshold 75%
 - After compaction: keep last 8 messages + compact summary in DB
-- Compact summary written to workspace/\_memory/stm/current.md
+- Compact summary written to workspace/projects/{slug}/\_memory/stm/current.md (project-scoped)
 
 ### Notification ordering
 
@@ -171,3 +175,30 @@ Phase 5: Memory system + analytics
 
 - mypy, ruff, pytest, pytest-asyncio are not tracked in `requirements.in`
 - Install manually into the venv: `.venv/bin/pip install mypy ruff pytest pytest-asyncio`
+
+### Orchestrator provider routing
+
+- Model name starting with "claude-" → Anthropic SDK
+- Anything else → Ollama via /api/chat HTTP endpoint
+- Detection: \_detect_provider(model: str) -> Literal["anthropic", "ollama"]
+
+### Fallback chain
+
+- Ollama unreachable → warn in chat with prefix, create system notification,
+  fall back to claude-sonnet-4-6 (ORCHESTRATOR_MODEL_DEFAULT)
+- Anthropic quota/rate limit (HTTP 429, 529, RateLimitError) → halt entirely,
+  create high-priority system notification, broadcast WS_CHAT_ERROR
+  DO NOT fall back to another paid service
+
+### Editable preambles
+
+- orchestrator_preamble_anthropic — custom static prompt for Anthropic models
+- orchestrator_preamble_ollama — custom static prompt for Ollama models
+- Empty string = use hardcoded default (ANTHROPIC_PREAMBLE_DEFAULT / OLLAMA_PREAMBLE_DEFAULT)
+- Dynamic state (STM, project context, kill switch, notifications) always appends after
+
+### Context window
+
+- Anthropic: 200_000 tokens, compact at 75% = 150_000
+- Ollama: read ollama_context_window setting (default 8192), compact at 75%
+- Token counts from Ollama: prompt_eval_count (input) + eval_count (output)
