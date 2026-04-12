@@ -4,6 +4,7 @@ import { MoreHorizontalIcon, SendIcon, Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { clearChatHistory, getChatHistory, getCompactStatus, sendMessage } from '@/api/chat'
 import { Button } from '@/components/ui/button'
+import { ToolApprovalCard } from '@/components/dashboard/ToolApprovalCard'
 import { wsClientId } from '@/lib/wsClientId'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/useAppStore'
@@ -131,6 +132,9 @@ export function OrchestratorChat() {
   const isStreaming = useAppStore((s) => s.isStreaming)
   const clearStreamingContent = useAppStore((s) => s.clearStreamingContent)
   const setIsStreaming = useAppStore((s) => s.setIsStreaming)
+  const clearToolApprovals = useAppStore((s) => s.clearToolApprovals)
+  const toolApprovals = useAppStore((s) => s.toolApprovals)
+  const approvalList = Object.values(toolApprovals)
 
   const { data: history = [] } = useQuery({
     queryKey: ['chatHistory', activeProjectId],
@@ -138,11 +142,12 @@ export function OrchestratorChat() {
     enabled: activeProjectId !== null,
   })
 
-  // Clear streaming state when switching projects
+  // Clear streaming state and approval cards when switching projects
   useEffect(() => {
     clearStreamingContent()
     setIsStreaming(false)
-  }, [activeProjectId, clearStreamingContent, setIsStreaming])
+    clearToolApprovals()
+  }, [activeProjectId, clearStreamingContent, setIsStreaming, clearToolApprovals])
 
   // Listen for compact_triggered via query invalidation — track locally for indicator
   const prevHistoryLen = useRef(history.length)
@@ -153,12 +158,12 @@ export function OrchestratorChat() {
     prevHistoryLen.current = history.length
   }, [history.length])
 
-  // Auto-scroll to bottom when messages change or streaming
+  // Auto-scroll to bottom when messages change, streaming, or approval cards change
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [history, streamingContent])
+  }, [history, streamingContent, approvalList.length])
 
   // Close menu on outside click
   useEffect(() => {
@@ -284,7 +289,7 @@ export function OrchestratorChat() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0"
       >
-        {history.length === 0 && !isStreaming && (
+        {history.length === 0 && !isStreaming && approvalList.length === 0 && (
           <div className="flex items-center justify-center h-full">
             <p className="text-xs text-zinc-600">
               Ask the orchestrator anything about your projects…
@@ -303,6 +308,11 @@ export function OrchestratorChat() {
         ))}
 
         {isStreaming && <StreamingBubble content={streamingContent} />}
+
+        {/* Approval cards render inline after streaming content */}
+        {approvalList.map((approval) => (
+          <ToolApprovalCard key={approval.request_id} approval={approval} />
+        ))}
       </div>
 
       {/* Input area */}

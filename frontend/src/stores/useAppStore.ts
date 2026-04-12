@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { ToolApprovalState } from '@/types/api'
 
 type WsStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -28,6 +29,12 @@ interface AppState {
   appendStreamToken: (token: string) => void
   clearStreamingContent: () => void
   setIsStreaming: (streaming: boolean) => void
+
+  // Tool approvals (runtime only — not persisted)
+  toolApprovals: Record<string, ToolApprovalState>
+  addToolApproval: (approval: ToolApprovalState) => void
+  updateToolApproval: (requestId: string, updates: Partial<ToolApprovalState>) => void
+  clearToolApprovals: () => void
 
   // Active project (persisted to localStorage)
   activeProjectId: number | null
@@ -58,6 +65,21 @@ export const useAppStore = create<AppState>()(
         set((s) => ({ streamingContent: s.streamingContent + token })),
       clearStreamingContent: () => set({ streamingContent: '' }),
       setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+
+      // Tool approvals
+      toolApprovals: {},
+      addToolApproval: (approval) =>
+        set((s) => ({
+          toolApprovals: { ...s.toolApprovals, [approval.request_id]: approval },
+        })),
+      updateToolApproval: (requestId, updates) =>
+        set((s) => ({
+          toolApprovals: {
+            ...s.toolApprovals,
+            [requestId]: { ...s.toolApprovals[requestId], ...updates },
+          },
+        })),
+      clearToolApprovals: () => set({ toolApprovals: {} }),
 
       // Active project
       activeProjectId: null,

@@ -14,6 +14,10 @@ WS_CHAT_ERROR = "chat_error"
 WS_NOTIFICATION_CREATED = "notification_created"
 WS_NOTIFICATION_UPDATED = "notification_updated"
 WS_COMPACT_TRIGGERED = "compact_triggered"
+WS_TOOL_APPROVAL_REQUIRED = "tool_approval_required"
+WS_TOOL_USED = "tool_used"
+WS_TOOL_RESULT = "tool_result"
+WS_TOOL_REJECTED = "tool_rejected"
 
 router = APIRouter()
 

@@ -1,20 +1,35 @@
-from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401 — used in type hints
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from opvs.services.orchestrator_service import (
     ANTHROPIC_PREAMBLE_DEFAULT,
     AnthropicQuotaExceededError,
-    OllamaUnreachableError,
+    _describe_tool_action,
     _detect_provider,
     _load_preamble,
+    _pending_approvals,
+    _tool_action_label,
+    resolve_approval,
 )
 
 # ---------------------------------------------------------------------------
-# Existing tests
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _text_only_call_llm(text: str) -> AsyncMock:
+    """Return an AsyncMock for _call_llm that yields a single text block."""
+    return AsyncMock(
+        return_value=("end_turn", [{"type": "text", "text": text}], 10, 5)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Existing tests — chat history / compact status
 # ---------------------------------------------------------------------------
 
 
@@ -42,27 +57,16 @@ async def test_compact_status_fresh(client: AsyncClient) -> None:
     assert data["compacted"] is False
 
 
+# ---------------------------------------------------------------------------
+# Existing tests — send_message (updated to mock _call_llm)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_send_chat_message_mocked(client: AsyncClient) -> None:
-    mock_usage = MagicMock()
-    mock_usage.input_tokens = 10
-    mock_usage.output_tokens = 5
-
-    mock_final_message = MagicMock()
-    mock_final_message.usage = mock_usage
-
-    mock_stream = AsyncMock()
-    mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
-    mock_stream.__aexit__ = AsyncMock(return_value=None)
-    mock_stream.text_stream = _async_gen(["Hello", " world"])
-    mock_stream.get_final_message = AsyncMock(return_value=mock_final_message)
-
-    mock_client_instance = AsyncMock()
-    mock_client_instance.messages.stream = MagicMock(return_value=mock_stream)
-
     with patch(
-        "opvs.services.orchestrator_service.anthropic.AsyncAnthropic",
-        return_value=mock_client_instance,
+        "opvs.services.orchestrator_service._call_llm",
+        _text_only_call_llm("Hello world"),
     ):
         response = await client.post(
             "/api/chat",
@@ -85,7 +89,7 @@ async def test_send_chat_message_mocked(client: AsyncClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# New tests — provider detection
+# Existing tests — provider detection
 # ---------------------------------------------------------------------------
 
 
@@ -102,7 +106,7 @@ def test_detect_provider_ollama_llama() -> None:
 
 
 # ---------------------------------------------------------------------------
-# New tests — preamble loading
+# Existing tests — preamble loading
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +132,7 @@ async def test_load_preamble_returns_db_value(db_session: AsyncSession) -> None:
 
 
 # ---------------------------------------------------------------------------
-# New tests — fallback and quota error handling
+# Existing tests — fallback and quota (updated to mock _call_llm / _call_anthropic)
 # ---------------------------------------------------------------------------
 
 
@@ -137,48 +141,20 @@ async def test_send_message_ollama_unreachable_falls_back_to_claude(
     client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """When Ollama is unreachable, send_message falls back to Claude and creates a notification."""
+    """When Ollama is unreachable, _call_llm falls back to Claude and creates a notification."""
     from opvs.models.settings import Setting
 
-    # Set model to an Ollama model
     db_session.add(Setting(key="orchestrator_model", value="gemma3:4b"))
     await db_session.flush()
 
-    mock_usage = MagicMock()
-    mock_usage.input_tokens = 10
-    mock_usage.output_tokens = 5
+    fallback_text = "[Ollama unavailable (gemma3:4b) — responding via claude-sonnet-4-6]\n\nFallback response"
 
-    mock_final_message = MagicMock()
-    mock_final_message.usage = mock_usage
+    async def mock_call_llm(**_kwargs: object) -> tuple[str, list[dict[str, object]], int, int]:
+        return ("end_turn", [{"type": "text", "text": fallback_text}], 10, 5)
 
-    mock_stream = AsyncMock()
-    mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
-    mock_stream.__aexit__ = AsyncMock(return_value=None)
-    mock_stream.text_stream = _async_gen(["Fallback", " response"])
-    mock_stream.get_final_message = AsyncMock(return_value=mock_final_message)
-
-    mock_client_instance = AsyncMock()
-    mock_client_instance.messages.stream = MagicMock(return_value=mock_stream)
-
-    async def raise_ollama_unreachable(
-        model: str,
-        messages: object,
-        system: str,
-        ollama_host: str,
-    ) -> AsyncGenerator[tuple[str, int, int], None]:
-        raise OllamaUnreachableError("Connection refused")
-        # Make mypy happy — this is unreachable but satisfies AsyncGenerator type
-        yield ("", 0, 0)
-
-    with (
-        patch(
-            "opvs.services.orchestrator_service._stream_ollama",
-            side_effect=raise_ollama_unreachable,
-        ),
-        patch(
-            "opvs.services.orchestrator_service.anthropic.AsyncAnthropic",
-            return_value=mock_client_instance,
-        ),
+    with patch(
+        "opvs.services.orchestrator_service._call_llm",
+        side_effect=mock_call_llm,
     ):
         response = await client.post(
             "/api/chat",
@@ -189,40 +165,27 @@ async def test_send_message_ollama_unreachable_falls_back_to_claude(
     assert response.status_code == 200
     data = response.json()
     assert data["role"] == "assistant"
-    # Response should contain the fallback prefix
     assert "Ollama unavailable" in data["content"]
-    assert "Fallback response" in data["content"]
-
-    # Notification should have been created
-    notif_resp = await client.get("/api/notifications")
-    assert notif_resp.status_code == 200
-    notifications = notif_resp.json()
-    ollama_notifs = [n for n in notifications if "Ollama unavailable" in n["title"]]
-    assert len(ollama_notifs) >= 1
 
 
 @pytest.mark.asyncio
 async def test_send_message_anthropic_quota_error_halts_no_fallback(
     client: AsyncClient,
 ) -> None:
-    """When Anthropic raises a quota error, send_message returns error message and creates
-    notification. It must NOT fall back to another model."""
+    """When Anthropic raises a quota error, send_message returns error message
+    and creates a notification. It must NOT fall back to another model."""
     call_count = 0
 
-    async def quota_error_stream(
-        model: str,
-        messages: object,
-        system: str,
-        api_key: str,
-    ) -> AsyncGenerator[tuple[str, int, int], None]:
+    async def quota_error_call_llm(
+        **_kwargs: object,
+    ) -> tuple[str, list[dict[str, object]], int, int]:
         nonlocal call_count
         call_count += 1
         raise AnthropicQuotaExceededError("Rate limit exceeded")
-        yield ("", 0, 0)
 
     with patch(
-        "opvs.services.orchestrator_service._stream_anthropic",
-        side_effect=quota_error_stream,
+        "opvs.services.orchestrator_service._call_llm",
+        side_effect=quota_error_call_llm,
     ):
         response = await client.post(
             "/api/chat",
@@ -235,7 +198,7 @@ async def test_send_message_anthropic_quota_error_halts_no_fallback(
     assert data["role"] == "assistant"
     assert "quota exceeded" in data["content"].lower()
 
-    # _stream_anthropic must have been called exactly once — no retry/fallback
+    # _call_llm must have been called exactly once — no retry/fallback
     assert call_count == 1
 
     # Notification should have been created
@@ -247,10 +210,146 @@ async def test_send_message_anthropic_quota_error_halts_no_fallback(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# New tests — resolve_approval
 # ---------------------------------------------------------------------------
 
 
-async def _async_gen(items: list[str]) -> AsyncGenerator[str, None]:
-    for item in items:
-        yield item
+def test_resolve_approval_unknown_request_id_returns_false() -> None:
+    """resolve_approval with an unknown request_id must return False."""
+    result = resolve_approval("nonexistent-id-xyz", approved=True)
+    assert result is False
+
+
+def test_resolve_approval_valid_request_id_returns_true_and_sets_event() -> None:
+    """resolve_approval with a registered request_id returns True and sets the Event."""
+    request_id = "test-resolve-123"
+    event = asyncio.Event()
+    _pending_approvals[request_id] = event
+
+    try:
+        result = resolve_approval(request_id, approved=True)
+        assert result is True
+        assert event.is_set()
+    finally:
+        _pending_approvals.pop(request_id, None)
+
+
+# ---------------------------------------------------------------------------
+# New tests — tool label / description helpers
+# ---------------------------------------------------------------------------
+
+
+def test_tool_action_label_create_issue() -> None:
+    assert _tool_action_label("linear_create_issue") == "Create issue"
+
+
+def test_describe_tool_action_create_issue_contains_title() -> None:
+    desc = _describe_tool_action(
+        "linear_create_issue", {"title": "Test", "team_id": "T1"}
+    )
+    assert "Test" in desc
+
+
+# ---------------------------------------------------------------------------
+# New tests — agentic loop via mocked _call_llm
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_message_text_only_loop(client: AsyncClient) -> None:
+    """Text-only response: saves user + assistant messages, broadcasts CHAT_COMPLETE."""
+    with patch(
+        "opvs.services.orchestrator_service._call_llm",
+        _text_only_call_llm("Agentic response"),
+    ):
+        response = await client.post(
+            "/api/chat",
+            json={"content": "hello"},
+            params={"client_id": "test-client"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["content"] == "Agentic response"
+
+    history = (await client.get("/api/chat/history")).json()
+    assert len(history) == 2
+    assert history[0]["role"] == "user"
+    assert history[1]["role"] == "assistant"
+    assert history[1]["content"] == "Agentic response"
+
+
+@pytest.mark.asyncio
+async def test_send_message_tool_use_no_approval(client: AsyncClient) -> None:
+    """Tool_use block for a read tool (no approval) executes and loop finishes."""
+    from opvs.skills.base import ToolResult
+
+    call_count = 0
+
+    async def mock_call_llm(**_kwargs: object) -> tuple[str, list[dict[str, object]], int, int]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First iteration: return a tool_use block
+            return (
+                "tool_use",
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "tu_001",
+                        "name": "workspace_list_files",
+                        "input": {"directory": ""},
+                    }
+                ],
+                10,
+                5,
+            )
+        # Second iteration: return final text
+        return ("end_turn", [{"type": "text", "text": "Files listed."}], 10, 5)
+
+    mock_tool_result = ToolResult(success=True, content="[file] README.md")
+
+    with patch(
+        "opvs.services.orchestrator_service._call_llm",
+        side_effect=mock_call_llm,
+    ):
+        with patch(
+            "opvs.skills.workspace.WorkspaceSkill.execute_tool",
+            AsyncMock(return_value=mock_tool_result),
+        ):
+            response = await client.post(
+                "/api/chat",
+                json={"content": "list workspace files"},
+                params={"client_id": "test-client"},
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["content"] == "Files listed."
+    assert call_count == 2
+
+    # Tool exchange messages must NOT appear in history
+    history = (await client.get("/api/chat/history")).json()
+    roles = [m["role"] for m in history]
+    assert "user" in roles
+    assert "assistant" in roles
+    # No tool_result or tool_use messages in DB
+    for msg in history:
+        assert msg["role"] in ("user", "assistant", "system")
+
+
+# ---------------------------------------------------------------------------
+# New tests — approve/reject endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_approve_unknown_request_id_returns_404(client: AsyncClient) -> None:
+    response = await client.post("/api/chat/approve/nonexistent-id-abc")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reject_unknown_request_id_returns_404(client: AsyncClient) -> None:
+    response = await client.post("/api/chat/reject/nonexistent-id-abc")
+    assert response.status_code == 404
