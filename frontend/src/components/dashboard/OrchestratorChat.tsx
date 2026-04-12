@@ -108,6 +108,8 @@ export function OrchestratorChat() {
 
   const streamingContent = useAppStore((s) => s.streamingContent)
   const isStreaming = useAppStore((s) => s.isStreaming)
+  const clearStreamingContent = useAppStore((s) => s.clearStreamingContent)
+  const setIsStreaming = useAppStore((s) => s.setIsStreaming)
 
   const { data: history = [] } = useQuery({
     queryKey: ['chatHistory'],
@@ -143,7 +145,37 @@ export function OrchestratorChat() {
 
   const sendMutation = useMutation({
     mutationFn: (content: string) => sendMessage(content, clientId.current),
-    onError: (err) => {
+    onMutate: (content: string) => {
+      // Show user message immediately without waiting for the server round-trip
+      clearStreamingContent()
+      setIsStreaming(true)
+      const optimisticId = -Date.now()
+      const optimisticMsg: ChatMessage = {
+        id: optimisticId,
+        role: 'user',
+        content,
+        token_count: 0,
+        is_compact_summary: false,
+        created_at: new Date().toISOString(),
+      }
+      qc.setQueryData<ChatMessage[]>(['chatHistory'], (old = []) => [...old, optimisticMsg])
+      return { optimisticId }
+    },
+    onSuccess: () => {
+      // The WS chat_complete handler already does this when WS is working.
+      // Calling again here is idempotent and covers the WS-broken fallback.
+      setIsStreaming(false)
+      clearStreamingContent()
+      void qc.invalidateQueries({ queryKey: ['chatHistory'] })
+    },
+    onError: (err, _content, context) => {
+      if (context) {
+        qc.setQueryData<ChatMessage[]>(['chatHistory'], (old = []) =>
+          old.filter((m) => m.id !== context.optimisticId),
+        )
+      }
+      setIsStreaming(false)
+      clearStreamingContent()
       toast.error(`Send failed: ${err instanceof Error ? err.message : String(err)}`)
     },
   })
