@@ -27,3 +27,49 @@ export interface HealthResponse {
   status: string
   version: string
 }
+
+// Notifications
+export type NotificationStatus = 'pending' | 'completed' | 'dismissed'
+export type NotificationSourceType = 'orchestrator' | 'agent' | 'job' | 'system'
+
+export interface Notification {
+  id: number
+  title: string
+  body: string
+  status: NotificationStatus
+  source_type: NotificationSourceType
+  agent_id: string | null
+  session_id: string | null
+  job_id: string | null
+  priority: number
+  orchestrator_prioritised: boolean
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export type MessageRole = 'user' | 'assistant' | 'system'
+
+export interface ChatMessage {
+  id: number
+  role: MessageRole
+  content: string
+  token_count: number
+  is_compact_summary: boolean
+  created_at: string
+}
+
+export interface ChatRequest {
+  content: string
+}
+
+export interface CompactStatus {
+  total_tokens: number
+  threshold: number
+  compacted: boolean
+}
+
+export interface KillSwitchStatus {
+  active: boolean
+  activated_at: string | null
+}

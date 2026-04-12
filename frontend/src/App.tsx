@@ -1,8 +1,9 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
 import { useWebSocket } from '@/hooks/useWebSocket'
+import { useAppStore } from '@/stores/useAppStore'
 import Agents from '@/pages/Agents'
 import Analytics from '@/pages/Analytics'
 import Dashboard from '@/pages/Dashboard'
@@ -16,7 +17,43 @@ const queryClient = new QueryClient({
 })
 
 function AppInner() {
-  useWebSocket({})
+  const qc = useQueryClient()
+  const setKillSwitchActive = useAppStore((s) => s.setKillSwitchActive)
+  const appendStreamToken = useAppStore((s) => s.appendStreamToken)
+  const clearStreamingContent = useAppStore((s) => s.clearStreamingContent)
+  const setIsStreaming = useAppStore((s) => s.setIsStreaming)
+
+  useWebSocket({
+    kill_switch_activated: () => {
+      setKillSwitchActive(true)
+      void qc.invalidateQueries({ queryKey: ['killswitch'] })
+    },
+    kill_switch_recovered: () => {
+      setKillSwitchActive(false)
+      void qc.invalidateQueries({ queryKey: ['killswitch'] })
+    },
+    chat_token: (payload: unknown) => {
+      const { token } = payload as { token: string }
+      appendStreamToken(token)
+      setIsStreaming(true)
+    },
+    chat_complete: () => {
+      setIsStreaming(false)
+      clearStreamingContent()
+      void qc.invalidateQueries({ queryKey: ['chatHistory'] })
+    },
+    chat_error: () => {
+      setIsStreaming(false)
+      clearStreamingContent()
+    },
+    notification_created: () => {
+      void qc.invalidateQueries({ queryKey: ['notifications'] })
+    },
+    notification_updated: () => {
+      void qc.invalidateQueries({ queryKey: ['notifications'] })
+    },
+  })
+
   return (
     <Routes>
       <Route element={<AppShell />}>
