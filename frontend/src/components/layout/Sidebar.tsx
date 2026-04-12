@@ -31,9 +31,11 @@ export function Sidebar() {
   return (
     <aside className="flex h-screen w-60 flex-shrink-0 flex-col bg-zinc-900">
       <div className="px-4 py-5">
-        <span className="text-sm font-semibold tracking-widest text-zinc-300 uppercase">
-          opvs OS
-        </span>
+        <img
+          src="/opvs-transparent-white.svg"
+          alt="opvs OS"
+          className="h-6 w-auto"
+        />
       </div>
 
       <nav className="flex-1 space-y-1 px-2">

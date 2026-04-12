@@ -62,6 +62,23 @@ Phase 5: Memory system + analytics
 
 ## Known implementation decisions (do not change these)
 
+### Node / Vite
+
+- Vite is pinned to v5 (`vite@5`) — Vite 8 requires Node 20.19+ which may not be present
+- `setup.sh` must check for Node >= 18, not just any Node version
+- `@tailwindcss/vite` supports Vite 5 — do not upgrade Vite without testing
+
+### shadcn/ui
+
+- `toast` component removed from shadcn v4 — use `sonner` instead
+- shadcn v4 uses `@theme inline` block for CSS variable mapping
+
+### TypeScript 6
+
+- `erasableSyntaxOnly` forbids parameter properties in constructors
+- Assign class properties explicitly in the constructor body instead
+- `baseUrl` is deprecated — use only `paths` in `tsconfig.app.json`
+
 ### SQLAlchemy
 
 - Use `DeclarativeBase` class (SQLAlchemy 2.0 style), not `declarative_base()` — required for strict mypy
