@@ -53,10 +53,34 @@ git checkout -b phase-1/foundation
 ## Build phases
 
 Phase 1: Foundation — backend scaffold, frontend scaffold, workspace + daemon scripts ✓ COMPLETE
-Phase 2 (current): Orchestrator + Dashboard ✓ COMPLETE (branch: phase-2/backend)
+Phase 2: Orchestrator + Dashboard ✓ COMPLETE (branch: phase-2/backend)
+Phase 2.5: Projects (models, CRUD API, workspace scoping, frontend switcher) ✓ COMPLETE (branches: phase-2.5/projects-backend, phase-2.5/projects-frontend)
 Phase 3: Agent system + personas
 Phase 4: Jobs + Linear integration
 Phase 5: Memory system + analytics
+
+### Project scoping (Phase 2.5)
+
+- Every notification and chat message has project_id (nullable)
+- project_id = null means global/system — appears in ALL projects' inboxes
+- project_id = N means scoped to that project only
+- Notification filter: WHERE project_id = :active OR project_id IS NULL
+- Chat history filter: WHERE project_id = :active
+- Active project stored in Zustand with localStorage persistence via persist middleware
+- Only activeProjectId is persisted — never wsStatus, streaming state, or killSwitchArmed
+
+### Project workspace structure
+
+- workspace/projects/{slug}/ created on project creation
+- STM path is project-scoped: workspace/projects/{slug}/\_memory/stm/current.md
+- Global STM at workspace/\_memory/stm/current.md is now unused (per-project replaces it)
+- CONTEXT.md at workspace/projects/{slug}/CONTEXT.md — project instructions for agents
+
+### One opvs project → many Linear projects
+
+- project_linear_links join table (project_id, linear_project_id, linear_project_name)
+- An opvs project = a product; multiple Linear projects = teams/workstreams within it
+- linear_project_name is cached on the link for display without re-fetching Linear
 
 ## Do not build beyond the current phase prompt without being asked.
 
@@ -97,6 +121,30 @@ Phase 5: Memory system + analytics
 - Use `DeclarativeBase` class (SQLAlchemy 2.0 style), not `declarative_base()` — required for strict mypy
 - Example: `class Base(DeclarativeBase): pass`
 
+### SQLAlchemy — bidirectional relationship without DB-level FK
+
+When a `project_id` column intentionally lacks `ForeignKey()` (FK constraints added later), use string-based `primaryjoin` + `foreign_keys` on both sides of the relationship:
+
+```python
+# Parent side:
+linear_links: Mapped[list["ProjectLinearLink"]] = relationship(
+    "ProjectLinearLink",
+    primaryjoin="ProjectLinearLink.project_id == Project.id",
+    foreign_keys="[ProjectLinearLink.project_id]",
+    cascade="all, delete-orphan",
+)
+# Child side:
+project: Mapped["Project"] = relationship(
+    "Project",
+    primaryjoin="ProjectLinearLink.project_id == Project.id",
+    foreign_keys="[ProjectLinearLink.project_id]",
+    overlaps="linear_links",
+)
+```
+
+- `overlaps="linear_links"` silences SAWarning about overlapping relationship attributes
+- String-based params resolve lazily — no import order issues
+
 ### Alembic + asyncio
 
 - Do not call `alembic.command.upgrade()` directly inside an async lifespan — causes nested event loop conflict
@@ -130,12 +178,12 @@ Phase 5: Memory system + analytics
 ### Orchestrator constraints (enforced in code, documented here)
 
 - orchestrator_service.py must never import subprocess, os.system, or os.popen
-- Orchestrator only writes to workspace/\_memory/ — all other workspace writes
-  require user approval
+- Orchestrator only writes to `workspace/projects/{slug}/_memory/` (project STM) — all other workspace writes require user approval
 - Kill switch state stored in settings table as kill_switch_active / kill_switch_activated_at
 - Context compaction triggers at 75% of 200k token window (150k tokens)
 - After compaction: keep last 8 messages + compact summary in DB
-- Compact summary written to workspace/\_memory/stm/current.md
+- Compact summary written to `workspace/projects/{slug}/_memory/stm/current.md` (project-scoped); global `workspace/_memory/stm/current.md` is now unused
+- `_get_stm_path(db, project_id)` helper resolves the correct path; falls back to global when project_id is None
 
 ### Notification ordering
 
