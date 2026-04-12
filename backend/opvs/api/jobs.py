@@ -10,10 +10,10 @@ from opvs.schemas.scheduled_job import (
 )
 from opvs.services import job_service
 
-router = APIRouter()
+router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
-@router.get("/", response_model=list[ScheduledJobResponse])
+@router.get("", response_model=list[ScheduledJobResponse])
 async def list_jobs(
     project_id: int | None = Query(default=None),
     status: JobStatus | None = Query(default=None),
@@ -23,7 +23,7 @@ async def list_jobs(
     return [ScheduledJobResponse.model_validate(j) for j in jobs]
 
 
-@router.post("/", response_model=ScheduledJobResponse, status_code=201)
+@router.post("", response_model=ScheduledJobResponse, status_code=201)
 async def create_job(
     data: ScheduledJobCreate,
     db: AsyncSession = Depends(get_db),

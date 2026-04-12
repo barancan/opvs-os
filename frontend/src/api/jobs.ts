@@ -6,11 +6,11 @@ export const listJobs = (projectId?: number, status?: JobStatus) => {
   if (projectId !== undefined) params.set('project_id', String(projectId))
   if (status) params.set('status', status)
   const qs = params.toString()
-  return apiClient.get<ScheduledJob[]>(`/api/jobs/${qs ? `?${qs}` : ''}`)
+  return apiClient.get<ScheduledJob[]>(`/api/jobs${qs ? `?${qs}` : ''}`)
 }
 
 export const createJob = (data: ScheduledJobCreate) =>
-  apiClient.post<ScheduledJob>('/api/jobs/', data)
+  apiClient.post<ScheduledJob>('/api/jobs', data)
 
 export const updateJob = (id: number, data: ScheduledJobUpdate) =>
   apiClient.put<ScheduledJob>(`/api/jobs/${id}`, data)
