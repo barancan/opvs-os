@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from opvs.database import get_db
@@ -48,3 +48,27 @@ async def get_compact_status(
         threshold=threshold,
         compacted=compacted,
     )
+
+
+@router.post("/approve/{request_id}")
+async def approve_tool_action(request_id: str) -> dict[str, str]:
+    """Approve a pending tool action. Unblocks the agentic loop."""
+    success = orchestrator_service.resolve_approval(request_id, approved=True)
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No pending approval found for request_id: {request_id}",
+        )
+    return {"status": "approved", "request_id": request_id}
+
+
+@router.post("/reject/{request_id}")
+async def reject_tool_action(request_id: str) -> dict[str, str]:
+    """Reject a pending tool action. Agentic loop continues without executing."""
+    success = orchestrator_service.resolve_approval(request_id, approved=False)
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No pending approval found for request_id: {request_id}",
+        )
+    return {"status": "rejected", "request_id": request_id}
