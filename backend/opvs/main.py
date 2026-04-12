@@ -34,13 +34,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
 
     from opvs.database import AsyncSessionLocal
-    from opvs.services.project_service import ensure_default_project
+    from opvs.services.project_service import (
+        _create_project_workspace,
+        _ensure_global_memory_structure,
+        ensure_default_project,
+        list_projects,
+    )
     from opvs.services.settings_service import get_setting
 
     async with AsyncSessionLocal() as db:
         workspace_setting = await get_setting(db, "workspace_path")
         wp = str(workspace_setting.value) if workspace_setting else settings.workspace_path
         await ensure_default_project(db, workspace_path=wp)
+
+        # Backfill memory structure for existing projects (idempotent)
+        _ensure_global_memory_structure(wp)
+        existing_projects = await list_projects(db)
+        for project in existing_projects:
+            _create_project_workspace(wp, project.slug)
 
     yield
 

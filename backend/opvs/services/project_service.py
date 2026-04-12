@@ -31,10 +31,16 @@ async def _unique_slug(db: AsyncSession, base_slug: str) -> str:
 
 
 def _create_project_workspace(workspace_path: str, slug: str) -> None:
-    """Create ICM-style workspace directories for a new project."""
+    """Create ICM-style workspace directories for a new project. Idempotent."""
     base = pathlib.Path(workspace_path) / "projects" / slug
-    (base / "_memory" / "stm").mkdir(parents=True, exist_ok=True)
-    (base / "_memory" / "inbox").mkdir(parents=True, exist_ok=True)
+    memory = base / "_memory"
+
+    # Create all memory subdirectories
+    (memory / "stm").mkdir(parents=True, exist_ok=True)
+    (memory / "inbox").mkdir(parents=True, exist_ok=True)
+    (memory / "decisions").mkdir(parents=True, exist_ok=True)
+    (memory / "research").mkdir(parents=True, exist_ok=True)
+    (memory / "sessions").mkdir(parents=True, exist_ok=True)
     (base / "sessions").mkdir(parents=True, exist_ok=True)
 
     context_file = base / "CONTEXT.md"
@@ -49,12 +55,59 @@ def _create_project_workspace(workspace_path: str, slug: str) -> None:
             encoding="utf-8",
         )
 
-    stm_file = base / "_memory" / "stm" / "current.md"
+    stm_file = memory / "stm" / "current.md"
     if not stm_file.exists():
         stm_file.write_text(
             "# Short-term memory\n\n*No context has been compacted yet.*\n",
             encoding="utf-8",
         )
+
+    index_file = memory / "INDEX.md"
+    if not index_file.exists():
+        index_file.write_text(
+            "# Project Memory Index\n\n"
+            "Entry point for this project's long-term memory wiki.\n"
+            "All links use Obsidian `[[wikilinks]]` format.\n\n"
+            "## Short-term memory\n\n"
+            "[[stm/current]]\n\n"
+            "## Decisions\n\n"
+            "*(Add links as decision records are created)*\n\n"
+            "## Research\n\n"
+            "*(Add links as research outputs are promoted from inbox)*\n\n"
+            "## Session summaries\n\n"
+            "*(Add links as agent sessions complete)*\n\n"
+            "## Inbox\n\n"
+            "Unreviewed orchestrator captures: `_memory/inbox/`\n",
+            encoding="utf-8",
+        )
+
+
+def _ensure_global_memory_structure(workspace_path: str) -> None:
+    """
+    Ensure the global _memory/ directory has the correct structure.
+    Safe to call multiple times — only creates missing directories, always rewrites INDEX.md.
+    """
+    memory = pathlib.Path(workspace_path) / "_memory"
+    (memory / "people").mkdir(parents=True, exist_ok=True)
+    (memory / "concepts").mkdir(parents=True, exist_ok=True)
+    (memory / "stm").mkdir(parents=True, exist_ok=True)
+    (memory / "inbox").mkdir(parents=True, exist_ok=True)
+
+    index_file = memory / "INDEX.md"
+    index_file.write_text(
+        "# Global Memory Index\n\n"
+        "Cross-project knowledge base. Use this for information that applies\n"
+        "across multiple projects: people, domain concepts, org context.\n\n"
+        "For project-specific memory, see:\n"
+        "`workspace/projects/{slug}/_memory/INDEX.md`\n\n"
+        "## People\n\n"
+        "*(Stakeholders, team members, external contacts)*\n\n"
+        "## Concepts\n\n"
+        "*(Domain knowledge, frameworks, definitions)*\n\n"
+        "## Inbox\n\n"
+        "Global unreviewed captures: `_memory/inbox/`\n",
+        encoding="utf-8",
+    )
 
 
 async def create_project(
@@ -62,6 +115,9 @@ async def create_project(
     data: ProjectCreate,
     workspace_path: str = "./workspace",
 ) -> Project:
+    # Ensure global memory structure exists (idempotent)
+    _ensure_global_memory_structure(workspace_path)
+
     base_slug = _generate_slug(data.name)
     slug = await _unique_slug(db, base_slug)
     project = Project(name=data.name, slug=slug, description=data.description)
