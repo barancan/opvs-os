@@ -5,12 +5,24 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$PROJECT_ROOT"
 
-# Kill any leftover backend process on port 8000
-OLD_PID=$(lsof -ti:8000 2>/dev/null || true)
+# Kill any leftover backend process listening on port 8000.
+# Use -sTCP:LISTEN to target only the listener, not browsers or other clients
+# that have open connections to the port.
+OLD_PID=$(lsof -ti:8000 -sTCP:LISTEN 2>/dev/null || true)
 if [ -n "$OLD_PID" ]; then
-  echo "Killing leftover process on port 8000 (PID $OLD_PID)..."
+  echo "Killing leftover process on port 8000 (PID $OLD_PID) and its children..."
+  # Kill child processes first, then the parent
+  pkill -P "$OLD_PID" 2>/dev/null || true
   kill "$OLD_PID" 2>/dev/null || true
-  sleep 1
+  # Wait until the port is actually free (up to 5s) before proceeding
+  i=0
+  while [ $i -lt 5 ]; do
+    if ! lsof -ti:8000 -sTCP:LISTEN > /dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
 fi
 
 # Check venv exists
