@@ -1,3 +1,4 @@
+from opvs.models.agent_message import AgentMessage as AgentMessage
 from opvs.models.agent_session import AgentSession as AgentSession
 from opvs.models.chat_message import ChatMessage as ChatMessage
 from opvs.models.notification import Notification as Notification
