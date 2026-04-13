@@ -165,6 +165,78 @@ export interface ScheduledJobUpdate {
   status?: JobStatus
 }
 
+// Personas
+export interface Persona {
+  id: number
+  name: string
+  description: string | null
+  model: string
+  instructions: string
+  enabled_skills: string[]
+  temperature: number
+  max_tokens: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PersonaCreate {
+  name: string
+  description?: string
+  model?: string
+  instructions?: string
+  enabled_skills?: string[]
+  temperature?: number
+  max_tokens?: number
+}
+
+export interface PersonaUpdate {
+  name?: string
+  description?: string
+  model?: string
+  instructions?: string
+  enabled_skills?: string[]
+  temperature?: number
+  max_tokens?: number
+  is_active?: boolean
+}
+
+// Agent Sessions
+export type SessionStatus = 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'halted'
+
+export interface AgentSession {
+  id: number
+  session_uuid: string
+  project_id: number
+  persona_id: number
+  persona_name: string
+  task: string
+  status: SessionStatus
+  model_snapshot: string
+  total_tokens: number
+  result_summary: string | null
+  error_message: string | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+}
+
+// Chatroom
+export type SenderType = 'user' | 'agent' | 'orchestrator' | 'system'
+
+export interface AgentMessage {
+  id: number
+  project_id: number
+  session_uuid: string | null
+  sender_type: SenderType
+  sender_name: string
+  content: string
+  requires_response: boolean
+  response_provided: boolean
+  reply_to_id: number | null
+  created_at: string
+}
+
 // Skills
 export interface ProjectSkill {
   skill_id: string

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { ToolApprovalState } from '@/types/api'
+import type { AgentMessage, AgentSession, SessionStatus, ToolApprovalState } from '@/types/api'
 
 type WsStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -44,6 +44,16 @@ interface AppState {
   // Active project (persisted to localStorage)
   activeProjectId: number | null
   setActiveProjectId: (id: number | null) => void
+
+  // Active agent sessions (runtime only — not persisted)
+  activeSessions: AgentSession[]
+  setActiveSessions: (sessions: AgentSession[]) => void
+  updateSessionStatus: (uuid: string, status: SessionStatus) => void
+
+  // Chatroom messages (runtime only — not persisted)
+  chatroomMessages: AgentMessage[]
+  addChatroomMessage: (msg: AgentMessage) => void
+  clearChatroomMessages: () => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -98,6 +108,27 @@ export const useAppStore = create<AppState>()(
       // Active project
       activeProjectId: null,
       setActiveProjectId: (id) => set({ activeProjectId: id }),
+
+      // Active sessions
+      activeSessions: [],
+      setActiveSessions: (sessions) => set({ activeSessions: sessions }),
+      updateSessionStatus: (uuid, status) =>
+        set((s) => ({
+          activeSessions: s.activeSessions.map((sess) =>
+            sess.session_uuid === uuid ? { ...sess, status } : sess,
+          ),
+        })),
+
+      // Chatroom messages
+      chatroomMessages: [],
+      addChatroomMessage: (msg) =>
+        set((s) => ({
+          // Deduplicate by id
+          chatroomMessages: s.chatroomMessages.some((m) => m.id === msg.id)
+            ? s.chatroomMessages
+            : [...s.chatroomMessages, msg],
+        })),
+      clearChatroomMessages: () => set({ chatroomMessages: [] }),
     }),
     {
       name: 'opvs-app-store',
