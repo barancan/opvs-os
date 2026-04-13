@@ -40,6 +40,8 @@ frontend/.vite/
 
 # Runtime workspace (agents read/write here at runtime)
 backend/workspace/
+workspace/*
+!workspace/CLAUDE.md
 
 # TypeScript path-alias artifact (tsc resolving @ literally instead of via alias)
 frontend/@/
