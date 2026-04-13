@@ -233,3 +233,16 @@ Phase 5: Memory system + analytics
 - Uses /v1/chat/completions endpoint (OpenAI-compatible) for tool support
 - /api/chat does not reliably support tool_calls across all models
 - Tool format converted from Anthropic schema to OpenAI function format
+
+### Agent system
+
+- Personas are global (not project-scoped) — reusable across projects
+- Sessions are project-scoped — each run tied to a project
+- Persona config is snapshot at spawn time — editing persona doesn't affect running sessions
+- Concurrency limit: settings key agent_max_concurrent (default 2)
+- Halt: sets asyncio.Event per session_uuid — stops loop at next iteration check
+- Chatroom: agent_messages table, project-scoped, fully public
+- Agent questions: detected by text ending in "?" → posts to chatroom, awaits response event
+- Write tool approval for agents: goes through chatroom (not the orchestrator approval card)
+- WS client*id for agents: f"agent*{session_uuid}"
+- AgentSession.enabled_skills_snapshot: comma-separated string, same format as Persona.enabled_skills
