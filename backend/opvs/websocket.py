@@ -21,6 +21,13 @@ WS_TOOL_REJECTED = "tool_rejected"
 WS_JOB_STARTED = "job_started"
 WS_JOB_COMPLETED = "job_completed"
 WS_JOB_FAILED = "job_failed"
+WS_SESSION_STARTED = "session_started"
+WS_SESSION_COMPLETED = "session_completed"
+WS_SESSION_FAILED = "session_failed"
+WS_SESSION_HALTED = "session_halted"
+WS_SESSION_WAITING = "session_waiting"    # agent posted a question
+WS_AGENT_MESSAGE = "agent_message"        # new chatroom message
+WS_AGENT_TOKEN = "agent_token"            # streaming token from an agent
 
 router = APIRouter()
 

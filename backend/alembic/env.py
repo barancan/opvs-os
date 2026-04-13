@@ -11,6 +11,9 @@ from opvs.models.chat_message import ChatMessage  # noqa: F401
 from opvs.models.project import Project, ProjectLinearLink  # noqa: F401
 from opvs.models.project_skill import ProjectSkill  # noqa: F401
 from opvs.models.scheduled_job import ScheduledJob  # noqa: F401
+from opvs.models.persona import Persona  # noqa: F401
+from opvs.models.agent_session import AgentSession  # noqa: F401
+from opvs.models.agent_message import AgentMessage  # noqa: F401
 
 config = context.config
 

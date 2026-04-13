@@ -7,7 +7,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useAppStore } from '@/stores/useAppStore'
-import type { ToolApprovalRequest } from '@/types/api'
+import type { AgentMessage, SessionStatus, ToolApprovalRequest } from '@/types/api'
 import Agents from '@/pages/Agents'
 import Analytics from '@/pages/Analytics'
 import Dashboard from '@/pages/Dashboard'
@@ -34,6 +34,8 @@ function AppInner() {
   const clearToolApprovals = useAppStore((s) => s.clearToolApprovals)
   const addRunningJob = useAppStore((s) => s.addRunningJob)
   const removeRunningJob = useAppStore((s) => s.removeRunningJob)
+  const updateSessionStatus = useAppStore((s) => s.updateSessionStatus)
+  const addChatroomMessage = useAppStore((s) => s.addChatroomMessage)
 
   // Bootstrap: ensure activeProjectId always points to a valid active project
   const { data: projects } = useQuery({
@@ -119,6 +121,28 @@ function AppInner() {
       void qc.invalidateQueries({ queryKey: ['jobs'] })
       void qc.invalidateQueries({ queryKey: ['notifications'] })
       toast.error(`Job #${job_id} failed: ${error}`)
+    },
+    session_started: () => {
+      void qc.invalidateQueries({ queryKey: ['sessions'] })
+    },
+    session_completed: (payload: unknown) => {
+      const { session_uuid } = payload as { session_uuid: string }
+      updateSessionStatus(session_uuid, 'completed' as SessionStatus)
+      void qc.invalidateQueries({ queryKey: ['sessions'] })
+      void qc.invalidateQueries({ queryKey: ['notifications'] })
+    },
+    session_failed: (payload: unknown) => {
+      const { session_uuid } = payload as { session_uuid: string }
+      updateSessionStatus(session_uuid, 'failed' as SessionStatus)
+      void qc.invalidateQueries({ queryKey: ['sessions'] })
+    },
+    session_halted: (payload: unknown) => {
+      const { session_uuid } = payload as { session_uuid: string }
+      updateSessionStatus(session_uuid, 'halted' as SessionStatus)
+      void qc.invalidateQueries({ queryKey: ['sessions'] })
+    },
+    agent_message: (payload: unknown) => {
+      addChatroomMessage(payload as AgentMessage)
     },
   })
 

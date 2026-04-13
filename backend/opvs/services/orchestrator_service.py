@@ -291,6 +291,14 @@ async def _build_system_prompt(
                 if "No context has been compacted yet" not in content:
                     sections.append(f"## Short-term memory\n\n{content}")
 
+            activity_log = (
+                workspace_path / "projects" / project_slug / "_memory" / "activity_log.md"
+            )
+            if activity_log.exists():
+                log_content = activity_log.read_text(encoding="utf-8").strip()
+                if log_content:
+                    sections.append(f"## Recent agent activity\n\n{log_content}")
+
     # 3. Dynamic system state
     from opvs.services import killswitch_service
 
