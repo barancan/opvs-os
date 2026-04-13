@@ -1,16 +1,19 @@
-# Memory Index
+# Global Memory Index
 
-Entry point for the opvs OS long-term memory wiki.
+Cross-project knowledge base. Use this for information that applies
+across multiple projects: people, domain concepts, org context.
 
-## Short-term memory
+For project-specific memory, see:
+`workspace/projects/{slug}/_memory/INDEX.md`
 
-Current compact context summary: [[stm/current]]
+## People
 
-## Long-term memory
+*(Stakeholders, team members, external contacts)*
 
-*(Add links here as wiki pages are created and promoted from inbox)*
+## Concepts
+
+*(Domain knowledge, frameworks, definitions)*
 
 ## Inbox
 
-Unreviewed captures from the orchestrator: `_memory/inbox/`
-Open each file, review, then move to an appropriate section above.
+Global unreviewed captures: `_memory/inbox/`

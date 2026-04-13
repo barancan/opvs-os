@@ -246,3 +246,18 @@ Phase 5: Memory system + analytics
 - Write tool approval for agents: goes through chatroom (not the orchestrator approval card)
 - WS client*id for agents: f"agent*{session_uuid}"
 - AgentSession.enabled_skills_snapshot: comma-separated string, same format as Persona.enabled_skills
+
+### Agent memory on completion
+
+- Session output → workspace/projects/{slug}/_memory/inbox/session_{ts}\_{uuid8}.md
+- Activity log → workspace/projects/{slug}/\_memory/activity_log.md (max 50 entries)
+- Orchestrator loads activity_log.md in system prompt under "Recent agent activity"
+- STM is NOT directly written by agents — inbox + activity log feed into compaction
+
+### Offline @ mention
+
+- Mention detection in post_user_reply checks active sessions first
+- Active session found → deliver_mention() (inject into next loop iteration)
+- No active session → reply_offline_mention() (single-turn, no tools, no loop)
+- Offline reply uses persona's configured model and reads project STM + activity log
+- Offline sender name: "{persona.name} (offline)"
