@@ -78,21 +78,48 @@ async def post_user_reply(
         },
     )
 
-    # Detect @Name mentions and deliver to running agents
-    mention_names = re.findall(r'@(\w+(?:\s+\w+)*)', data.content)
+    # Detect @Name mentions and route to active or offline handler
+    mention_names = re.findall(r'@([\w][\w\s]*?)(?=\s|$|[^\w\s])', data.content)
     if mention_names:
-        running_result = await db.execute(
+        import asyncio
+
+        from opvs.services.persona_service import list_personas
+
+        active_result = await db.execute(
             select(AgentSession).where(
                 AgentSession.project_id == data.project_id,
-                AgentSession.status.in_([SessionStatus.RUNNING, SessionStatus.WAITING]),
+                AgentSession.status.in_([
+                    SessionStatus.RUNNING,
+                    SessionStatus.WAITING,
+                    SessionStatus.QUEUED,
+                ]),
             )
         )
-        running_sessions = running_result.scalars().all()
+        active_sessions = active_result.scalars().all()
+        all_personas = await list_personas(db, active_only=True)
+
         for mention_name in mention_names:
-            for session in running_sessions:
-                if mention_name.strip().lower() in session.persona_name.lower():
-                    agent_runner.deliver_mention(session.session_uuid, msg.id)
-                    break
+            name_lower = mention_name.strip().lower()
+            matched_session = next(
+                (s for s in active_sessions if name_lower in s.persona_name.lower()),
+                None,
+            )
+            if matched_session:
+                agent_runner.deliver_mention(matched_session.session_uuid, msg.id)
+            else:
+                matched_persona = next(
+                    (p for p in all_personas if name_lower in p.name.lower()),
+                    None,
+                )
+                if matched_persona:
+                    asyncio.create_task(
+                        agent_runner.reply_offline_mention(
+                            project_id=data.project_id,
+                            persona_id=matched_persona.id,
+                            message_id=msg.id,
+                            mention_content=data.content,
+                        )
+                    )
 
     return AgentMessageResponse.model_validate(msg)
 

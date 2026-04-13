@@ -380,6 +380,15 @@ async def _run_session(
             session.result_summary = full_response[:1000]
             await db.commit()
 
+            await _write_session_memory(
+                workspace_path=workspace_path,
+                project_slug=project_slug,
+                session_uuid=session_uuid,
+                persona_name=session.persona_name,
+                task=session.task,
+                result=full_response,
+            )
+
             await create_notification(
                 db,
                 NotificationCreate(
@@ -627,6 +636,202 @@ async def _request_approval_via_chat(
     )
     reply = reply_result.scalar_one_or_none()
     return bool(reply and "approve" in reply.content.lower())
+
+
+async def _write_session_memory(
+    workspace_path: str,
+    project_slug: str,
+    session_uuid: str,
+    persona_name: str,
+    task: str,
+    result: str,
+) -> None:
+    """Write session output to project memory on completion."""
+    import pathlib
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    base = pathlib.Path(workspace_path) / "projects" / project_slug / "_memory"
+    now = _dt.now(_UTC)
+    timestamp = now.strftime("%Y-%m-%d %H:%M UTC")
+    filename_ts = now.strftime("%Y%m%d_%H%M%S")
+
+    # 1. Full output to inbox
+    inbox = base / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    inbox_file = inbox / f"session_{filename_ts}_{session_uuid[:8]}.md"
+    inbox_file.write_text(
+        f"# Agent Output: {persona_name}\n\n"
+        f"*Completed: {timestamp}*\n"
+        f"*Session: {session_uuid}*\n\n"
+        f"## Task\n\n{task}\n\n"
+        f"## Output\n\n{result}\n",
+        encoding="utf-8",
+    )
+
+    # 2. Activity log entry (cap at 50 entries)
+    activity_log = base / "activity_log.md"
+    entry = f"- [{timestamp}] **{persona_name}** completed: {task[:120]}\n"
+    if activity_log.exists():
+        current = activity_log.read_text(encoding="utf-8")
+        lines = current.splitlines(keepends=True)
+        entries = [ln for ln in lines if ln.startswith("- [")]
+        header = [ln for ln in lines if not ln.startswith("- [")]
+        entries = entries[-49:]
+        activity_log.write_text("".join(header) + "".join(entries) + entry, encoding="utf-8")
+    else:
+        activity_log.write_text(
+            "# Activity Log\n\n"
+            "*Recent agent completions — read by orchestrator for context.*\n\n"
+            + entry,
+            encoding="utf-8",
+        )
+
+
+async def reply_offline_mention(
+    project_id: int,
+    persona_id: int,
+    message_id: int,
+    mention_content: str,
+) -> None:
+    """
+    Called when a persona is mentioned but has no active session.
+    Runs a single-turn LLM call and posts the response to the chatroom.
+    """
+    import pathlib
+
+    from sqlalchemy import select as sa_select
+
+    from opvs.database import AsyncSessionLocal
+    from opvs.models.project import Project
+    from opvs.services.orchestrator_service import _detect_provider
+    from opvs.services.persona_service import get_persona
+    from opvs.websocket import WS_AGENT_MESSAGE
+    from opvs.websocket import manager as ws_manager
+
+    async with AsyncSessionLocal() as db:
+        persona = await get_persona(db, persona_id)
+        if persona is None:
+            return
+
+        proj_result = await db.execute(sa_select(Project).where(Project.id == project_id))
+        project = proj_result.scalar_one_or_none()
+        project_slug = project.slug if project else "default"
+        workspace_path = await _get_workspace_path(db)
+
+        stm_path = (
+            pathlib.Path(workspace_path)
+            / "projects"
+            / project_slug
+            / "_memory"
+            / "stm"
+            / "current.md"
+        )
+        stm = ""
+        if stm_path.exists():
+            stm_text = stm_path.read_text(encoding="utf-8")
+            if "No context has been compacted yet" not in stm_text:
+                stm = stm_text.strip()
+
+        activity_path = (
+            pathlib.Path(workspace_path)
+            / "projects"
+            / project_slug
+            / "_memory"
+            / "activity_log.md"
+        )
+        activity = ""
+        if activity_path.exists():
+            activity = activity_path.read_text(encoding="utf-8").strip()
+
+        system = (
+            f"You are {persona.name}, an AI agent. "
+            f"You are currently offline (not running a task) but have been "
+            f"mentioned in the team chat.\n\n"
+            f"## Your instructions\n{persona.instructions}\n\n"
+            + (f"## Short-term memory\n{stm}\n\n" if stm else "")
+            + (f"## Recent activity\n{activity}\n\n" if activity else "")
+            + "Respond to the mention concisely. "
+            + "Do not start new tasks — just answer the question."
+        )
+
+        model = persona.model
+        provider = _detect_provider(model)
+        api_keys = await _load_api_keys(db)
+
+        response_text = ""
+        try:
+            if provider == "anthropic":
+                import anthropic as anthropic_sdk
+
+                client = anthropic_sdk.AsyncAnthropic(api_key=api_keys.get("anthropic_api_key", ""))
+                import anthropic as _anthropic_types
+
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=min(persona.max_tokens, 1024),
+                    system=system,
+                    messages=[{"role": "user", "content": mention_content}],
+                )
+                for block in response.content:
+                    if isinstance(block, _anthropic_types.types.TextBlock):
+                        response_text = block.text
+                        break
+            else:
+                import httpx
+
+                from opvs.services.settings_service import get_setting
+
+                h = await get_setting(db, "ollama_host")
+                ollama_host = h.value if h and h.value else "http://localhost:11434"
+
+                async with httpx.AsyncClient(timeout=60.0) as http_client:
+                    resp = await http_client.post(
+                        f"{ollama_host.rstrip('/')}/api/chat",
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": mention_content},
+                            ],
+                            "stream": False,
+                        },
+                    )
+                    resp.raise_for_status()
+                    response_text = resp.json().get("message", {}).get("content", "")
+        except Exception as e:
+            logger.error("Offline mention reply failed for persona %d: %s", persona_id, e)
+            response_text = f"(Could not respond: {str(e)[:100]})"
+
+        if not response_text:
+            return
+
+        reply_msg = AgentMessage(
+            project_id=project_id,
+            session_uuid=None,
+            sender_type=SenderType.AGENT,
+            sender_name=f"{persona.name} (offline)",
+            content=response_text,
+            requires_response=False,
+        )
+        db.add(reply_msg)
+        await db.commit()
+        await db.refresh(reply_msg)
+
+        await ws_manager.broadcast(
+            WS_AGENT_MESSAGE,
+            {
+                "id": reply_msg.id,
+                "project_id": project_id,
+                "session_uuid": None,
+                "sender_type": "agent",
+                "sender_name": reply_msg.sender_name,
+                "content": response_text,
+                "requires_response": False,
+                "response_provided": False,
+                "created_at": reply_msg.created_at.isoformat(),
+            },
+        )
 
 
 async def _get_workspace_path(db: AsyncSession) -> str:
