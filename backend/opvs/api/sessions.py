@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,16 +66,47 @@ async def post_user_reply(
         WS_AGENT_MESSAGE,
         {
             "id": msg.id,
+            "project_id": data.project_id,
             "session_uuid": data.session_uuid,
             "sender_type": "user",
             "sender_name": "You",
             "content": data.content,
             "requires_response": False,
+            "response_provided": False,
             "reply_to_id": data.reply_to_id,
             "created_at": msg.created_at.isoformat(),
         },
     )
+
+    # Detect @Name mentions and deliver to running agents
+    mention_names = re.findall(r'@(\w+(?:\s+\w+)*)', data.content)
+    if mention_names:
+        running_result = await db.execute(
+            select(AgentSession).where(
+                AgentSession.project_id == data.project_id,
+                AgentSession.status.in_([SessionStatus.RUNNING, SessionStatus.WAITING]),
+            )
+        )
+        running_sessions = running_result.scalars().all()
+        for mention_name in mention_names:
+            for session in running_sessions:
+                if mention_name.strip().lower() in session.persona_name.lower():
+                    agent_runner.deliver_mention(session.session_uuid, msg.id)
+                    break
+
     return AgentMessageResponse.model_validate(msg)
+
+
+@router.post("/chatroom/mention")
+async def mention_agent(
+    session_uuid: str = Query(),
+    message_id: int = Query(),
+) -> dict[str, str]:
+    """Directly notify a running agent that it has been mentioned."""
+    success = agent_runner.deliver_mention(session_uuid, message_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not running or not found")
+    return {"status": "delivered", "session_uuid": session_uuid}
 
 
 # ── Session routes ───────────────────────────────────────────────────────────

@@ -40,3 +40,8 @@ export const postChatroomReply = (
     sender_type: 'user',
     sender_name: 'You',
   })
+
+export const mentionAgent = (sessionUuid: string, messageId: number): Promise<{ status: string }> =>
+  apiClient.post<{ status: string }>(
+    `/api/sessions/chatroom/mention?session_uuid=${sessionUuid}&message_id=${messageId}`,
+  )

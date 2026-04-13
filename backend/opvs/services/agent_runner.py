@@ -34,6 +34,9 @@ _halt_events: dict[str, asyncio.Event] = {}
 # Chatroom response events: agent_message_id → asyncio.Event
 _chatroom_response_events: dict[int, asyncio.Event] = {}
 
+# Mention queues: session_uuid → list of message_ids pending injection
+_mention_queues: dict[str, list[int]] = {}
+
 
 def get_running_count() -> int:
     return len([t for t in _running_tasks.values() if not t.done()])
@@ -121,6 +124,16 @@ def resolve_chatroom_response(message_id: int) -> bool:
     return True
 
 
+def deliver_mention(session_uuid: str, message_id: int) -> bool:
+    """Queue a mention for delivery to a running agent. Returns False if not running."""
+    if session_uuid not in _running_tasks:
+        return False
+    if _running_tasks[session_uuid].done():
+        return False
+    _mention_queues.setdefault(session_uuid, []).append(message_id)
+    return True
+
+
 async def _run_session(
     session_id: int,
     session_uuid: str,
@@ -185,11 +198,13 @@ async def _run_session(
             WS_AGENT_MESSAGE,
             {
                 "id": join_msg.id,
+                "project_id": project_id,
                 "session_uuid": session_uuid,
                 "sender_type": "agent",
                 "sender_name": session.persona_name,
                 "content": join_msg.content,
                 "requires_response": False,
+                "response_provided": False,
                 "created_at": join_msg.created_at.isoformat(),
             },
         )
@@ -231,6 +246,29 @@ async def _run_session(
             for _iteration in range(MAX_ITER):
                 if halt_event.is_set():
                     raise asyncio.CancelledError("Halted by user")
+
+                # Inject any pending @ mentions before the LLM call
+                pending_mentions = _mention_queues.pop(session_uuid, [])
+                if pending_mentions:
+                    from sqlalchemy import select as sa_select
+
+                    from opvs.models.agent_message import AgentMessage as AM
+
+                    mention_texts: list[str] = []
+                    for mid in pending_mentions:
+                        mresult = await db.execute(sa_select(AM).where(AM.id == mid))
+                        mention_msg = mresult.scalar_one_or_none()
+                        if mention_msg:
+                            mention_texts.append(
+                                f"[Mention from {mention_msg.sender_name}]: {mention_msg.content}"
+                            )
+                    if mention_texts:
+                        injection = (
+                            "You have been mentioned in the team chat:\n\n"
+                            + "\n".join(mention_texts)
+                            + "\n\nRespond to the mention in the chatroom, then continue your task."
+                        )
+                        messages.append({"role": "user", "content": injection})
 
                 model = session.model_snapshot
                 provider = _detect_provider(model)
@@ -368,11 +406,13 @@ async def _run_session(
                 WS_AGENT_MESSAGE,
                 {
                     "id": done_msg.id,
+                    "project_id": project_id,
                     "session_uuid": session_uuid,
                     "sender_type": "agent",
                     "sender_name": session.persona_name,
                     "content": done_msg.content,
                     "requires_response": False,
+                    "response_provided": False,
                     "created_at": done_msg.created_at.isoformat(),
                 },
             )
@@ -413,6 +453,7 @@ async def _run_session(
         finally:
             _running_tasks.pop(session_uuid, None)
             _halt_events.pop(session_uuid, None)
+            _mention_queues.pop(session_uuid, None)
 
 
 async def _build_agent_system_prompt(
@@ -499,11 +540,13 @@ async def _post_question(
         WS_AGENT_MESSAGE,
         {
             "id": msg.id,
+            "project_id": project_id,
             "session_uuid": session_uuid,
             "sender_type": "agent",
             "sender_name": sender_name,
             "content": question,
             "requires_response": True,
+            "response_provided": False,
             "created_at": msg.created_at.isoformat(),
         },
     )
@@ -554,11 +597,13 @@ async def _request_approval_via_chat(
         WS_AGENT_MESSAGE,
         {
             "id": msg.id,
+            "project_id": project_id,
             "session_uuid": session_uuid,
             "sender_type": "agent",
             "sender_name": sender_name,
             "content": content,
             "requires_response": True,
+            "response_provided": False,
             "message_id_for_approval": msg.id,
             "created_at": msg.created_at.isoformat(),
         },

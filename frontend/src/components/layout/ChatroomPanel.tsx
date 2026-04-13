@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { getChatroomMessages, postChatroomReply } from '@/api/sessions'
+import { getChatroomMessages, listSessions, postChatroomReply } from '@/api/sessions'
 import { useAppStore } from '@/stores/useAppStore'
 import type { AgentMessage } from '@/types/api'
 
@@ -99,44 +99,79 @@ export function ChatroomPanel() {
   const activeProjectId = useAppStore((s) => s.activeProjectId)
   const chatroomMessages = useAppStore((s) => s.chatroomMessages)
   const addChatroomMessage = useAppStore((s) => s.addChatroomMessage)
-  const activeSessions = useAppStore((s) => s.activeSessions)
 
   const [input, setInput] = useState('')
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [mentionQuery, setMentionQuery] = useState('')
   const [replyingToId, setReplyingToId] = useState<number | null>(null)
   const [replyInput, setReplyInput] = useState('')
   const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Load history from API
+  // Load history from API — seed Zustand once, then WS keeps it live
   const { data: history } = useQuery({
     queryKey: ['chatroomMessages', activeProjectId],
     queryFn: () => getChatroomMessages(activeProjectId!),
     enabled: activeProjectId !== null,
-    staleTime: 0,
+    staleTime: Infinity,
   })
 
-  // Seed store from query once on load (don't overwrite live messages)
   useEffect(() => {
-    if (history && chatroomMessages.length === 0) {
-      history.forEach(addChatroomMessage)
-    }
+    if (!history || chatroomMessages.length > 0) return
+    history.forEach(addChatroomMessage)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history])
+
+  // Active agent count via sessions query
+  const { data: sessions } = useQuery({
+    queryKey: ['sessions', activeProjectId, 'active'],
+    queryFn: () => listSessions(activeProjectId ?? undefined),
+    enabled: activeProjectId !== null,
+    refetchInterval: 10_000,
+  })
+
+  const activeAgentCount = sessions?.filter((s) =>
+    ['queued', 'running', 'waiting'].includes(s.status),
+  ).length ?? 0
+
+  const agentSuggestions = sessions
+    ?.filter((s) => ['queued', 'running', 'waiting'].includes(s.status))
+    .map((s) => ({ name: s.persona_name, uuid: s.session_uuid })) ?? []
 
   // Scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatroomMessages.length])
 
-  // Filter to active project
+  // Filter to active project — Zustand is authoritative
   const messages = chatroomMessages.filter(
     (m) => activeProjectId === null || m.project_id === activeProjectId,
   )
 
-  // Count active agents from running sessions
-  const activeAgentCount = activeSessions.filter((s) =>
-    ['queued', 'running', 'waiting'].includes(s.status),
-  ).length
+  const filteredSuggestions = agentSuggestions.filter((a) =>
+    a.name.toLowerCase().startsWith(mentionQuery.toLowerCase()),
+  )
+
+  function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const value = e.target.value
+    setInput(value)
+    const lastAt = value.lastIndexOf('@')
+    if (lastAt !== -1) {
+      const afterAt = value.slice(lastAt + 1)
+      if (!afterAt.includes(' ')) {
+        setMentionQuery(afterAt)
+        setShowSuggestions(agentSuggestions.length > 0)
+        return
+      }
+    }
+    setShowSuggestions(false)
+  }
+
+  function selectSuggestion(name: string) {
+    const lastAt = input.lastIndexOf('@')
+    setInput(input.slice(0, lastAt) + `@${name} `)
+    setShowSuggestions(false)
+  }
 
   async function handleSend() {
     if (!input.trim() || activeProjectId === null || sending) return
@@ -145,6 +180,7 @@ export function ChatroomPanel() {
       const msg = await postChatroomReply(activeProjectId, input.trim())
       addChatroomMessage(msg)
       setInput('')
+      setShowSuggestions(false)
     } catch {
       toast.error('Failed to send message')
     } finally {
@@ -210,24 +246,46 @@ export function ChatroomPanel() {
 
       {/* Input */}
       <div className="p-3 border-t border-zinc-800 flex-shrink-0">
-        <div className="flex gap-2">
-          <input
-            className="flex-1 text-sm bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5
-                       text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
-            placeholder="Message all agents…"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSend() }
-            }}
-          />
-          <button
-            onClick={() => void handleSend()}
-            disabled={sending}
-            className="text-xs text-zinc-400 hover:text-zinc-200 px-2 disabled:opacity-50"
-          >
-            Send
-          </button>
+        <div className="relative">
+          {showSuggestions && filteredSuggestions.length > 0 && (
+            <div className="absolute bottom-full left-0 right-0 mb-1 bg-zinc-800
+                            border border-zinc-700 rounded-md shadow-lg py-1 z-10">
+              {filteredSuggestions.map((agent) => (
+                <button
+                  key={agent.uuid}
+                  onClick={() => selectSuggestion(agent.name)}
+                  className="w-full text-left px-3 py-1.5 text-xs text-zinc-200
+                             hover:bg-zinc-700 flex items-center gap-2"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />
+                  {agent.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input
+              className="flex-1 text-sm bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5
+                         text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+              placeholder="Message agents… (@ to mention)"
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setShowSuggestions(false)
+                if (e.key === 'Enter' && !e.shiftKey && !showSuggestions) {
+                  e.preventDefault()
+                  void handleSend()
+                }
+              }}
+            />
+            <button
+              onClick={() => void handleSend()}
+              disabled={sending}
+              className="text-xs text-zinc-400 hover:text-zinc-200 px-2 disabled:opacity-50"
+            >
+              Send
+            </button>
+          </div>
         </div>
       </div>
     </div>
