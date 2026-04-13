@@ -261,3 +261,33 @@ Phase 5: Memory system + analytics
 - No active session → reply_offline_mention() (single-turn, no tools, no loop)
 - Offline reply uses persona's configured model and reads project STM + activity log
 - Offline sender name: "{persona.name} (offline)"
+
+### Memory system (updated)
+
+**STM update triggers (two-tier):**
+
+- Delta update: every MESSAGE_DELTA_THRESHOLD (10) orchestrator messages + after every agent session
+- Full compaction: at 75% context window or manual /compact
+- Delta is non-fatal and non-blocking (asyncio.create_task)
+
+**STM schema (structured, not prose):**
+Five required sections: Active tasks, Recent decisions, Open questions,
+Key context, Recent agent outputs. Compaction prompt enforces this schema.
+
+**Context loading order (ICM layers):**
+
+1. Preamble (Layer 0/1)
+2. Global \_memory/INDEX.md — navigation only
+3. Project CONTEXT.md — instructions
+4. Project \_memory/INDEX.md — navigation + "use workspace_read_file for pages"
+5. STM current.md — working state
+6. activity_log.md — last 20 entries only
+7. Dynamic state (kill switch, notifications)
+
+**LTM write (workspace_write_ltm):**
+
+- Requires approval
+- Sections: decisions, research, people, concepts, patterns
+- Creates/appends .md file with [[wikilinks]]
+- Automatically updates project INDEX.md
+- Agents propose, user approves, file is written

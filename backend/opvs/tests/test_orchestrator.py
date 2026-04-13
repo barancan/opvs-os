@@ -1,4 +1,5 @@
 import asyncio
+import pathlib
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -353,3 +354,78 @@ async def test_approve_unknown_request_id_returns_404(client: AsyncClient) -> No
 async def test_reject_unknown_request_id_returns_404(client: AsyncClient) -> None:
     response = await client.post("/api/chat/reject/nonexistent-id-abc")
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# New tests — delta_update_stm bootstraps STM when none exists
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delta_update_stm_bootstraps_when_no_stm(
+    tmp_path: pathlib.Path,
+    db_session: AsyncSession,
+) -> None:
+    """delta_update_stm should write an STM file using a mocked LLM call."""
+    from unittest.mock import MagicMock
+
+    from opvs.models.settings import Setting
+    from opvs.services.orchestrator_service import delta_update_stm
+
+    # Point workspace_path to tmp_path so STM writes go there
+    db_session.add(Setting(key="workspace_path", value=str(tmp_path)))
+    await db_session.flush()
+
+    mock_text_block = MagicMock()
+    mock_text_block.text = (
+        "## Active tasks\n- [test]: running\n\n"
+        "## Recent decisions\n*(none yet)*\n\n"
+        "## Open questions\n*(none yet)*\n\n"
+        "## Key context\n*(none yet)*\n\n"
+        "## Recent agent outputs\n*(none yet)*\n"
+    )
+    mock_response = MagicMock()
+    mock_response.content = [mock_text_block]
+
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_anthropic = MagicMock()
+    mock_anthropic.AsyncAnthropic.return_value = mock_client
+
+    with patch("opvs.services.orchestrator_service.anthropic", mock_anthropic):
+        await delta_update_stm(db_session, "test task started", project_id=None)
+
+    stm_path = pathlib.Path(str(tmp_path)) / "projects" / "default" / "_memory" / "stm" / "current.md"
+    assert stm_path.exists()
+    content = stm_path.read_text()
+    assert "Active tasks" in content
+
+
+# ---------------------------------------------------------------------------
+# New tests — COMPACTION_PROMPT_TEMPLATE has all five sections
+# ---------------------------------------------------------------------------
+
+
+def test_compaction_prompt_template_has_five_sections() -> None:
+    from opvs.services.orchestrator_service import COMPACTION_PROMPT_TEMPLATE
+
+    required_sections = [
+        "## Active tasks",
+        "## Recent decisions",
+        "## Open questions",
+        "## Key context",
+        "## Recent agent outputs",
+    ]
+    for section in required_sections:
+        assert section in COMPACTION_PROMPT_TEMPLATE, f"Missing section: {section}"
+
+
+# ---------------------------------------------------------------------------
+# New tests — MESSAGE_DELTA_THRESHOLD is 10
+# ---------------------------------------------------------------------------
+
+
+def test_message_delta_threshold_value() -> None:
+    from opvs.services.orchestrator_service import MESSAGE_DELTA_THRESHOLD
+
+    assert MESSAGE_DELTA_THRESHOLD == 10

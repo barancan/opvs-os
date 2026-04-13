@@ -70,6 +70,53 @@ class WorkspaceSkill(SkillBase):
                 },
                 requires_approval=False,  # inbox only — safe without approval
             ),
+            ToolDefinition(
+                name="workspace_write_ltm",
+                description=(
+                    "Propose writing a new long-term memory page or appending to an existing one. "
+                    "Use for insights, decisions, research findings, or patterns worth preserving "
+                    "permanently. Requires user approval before writing."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "section": {
+                            "type": "string",
+                            "enum": ["decisions", "research", "people", "concepts", "patterns"],
+                            "description": "Which memory section to write to.",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": (
+                                "Filename without extension (e.g. 'stablecoin-latam-research'). "
+                                "If file exists, content is appended. If not, a new page is created."
+                            ),
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Page title.",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": (
+                                "Markdown content. Use [[wikilinks]] to link to related pages. "
+                                "Example: 'Related to [[decisions/payment-flow]]'"
+                            ),
+                        },
+                        "links": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Other memory pages this relates to "
+                                "(e.g. ['decisions/payment-flow', 'concepts/unit-economics']). "
+                                "These will be added as wikilinks at the bottom."
+                            ),
+                        },
+                    },
+                    "required": ["section", "filename", "title", "content"],
+                },
+                requires_approval=True,
+            ),
         ]
 
     async def execute_tool(
@@ -86,6 +133,7 @@ class WorkspaceSkill(SkillBase):
             "workspace_read_file": self._read_file,
             "workspace_list_files": self._list_files,
             "workspace_capture": self._capture,
+            "workspace_write_ltm": self._write_ltm,
         }
         handler = handlers.get(tool_name)
         if handler is None:
@@ -176,4 +224,71 @@ class WorkspaceSkill(SkillBase):
             success=True,
             content=f"Captured to inbox: {filename}",
             data={"filename": filename},
+        )
+
+    async def _write_ltm(
+        self, inputs: dict[str, Any], project_root: pathlib.Path
+    ) -> ToolResult:
+        valid_sections = {"decisions", "research", "people", "concepts", "patterns"}
+        section = inputs.get("section", "")
+        if section not in valid_sections:
+            return ToolResult(success=False, content=f"Invalid section: {section!r}")
+
+        raw_name = inputs.get("filename", "").replace(".md", "")
+        safe_name = re.sub(r"[^\w\-]", "-", raw_name).strip("-")[:80]
+        if not safe_name:
+            return ToolResult(success=False, content="Invalid filename")
+
+        section_dir = project_root / "_memory" / section
+        section_dir.mkdir(parents=True, exist_ok=True)
+
+        # Validate the resolved path stays within project_root
+        filepath = self._resolve_safe(project_root, f"_memory/{section}/{safe_name}.md")
+        if filepath is None:
+            return ToolResult(success=False, content="Resolved path is outside project workspace.")
+
+        title = inputs.get("title", "")
+        content = inputs.get("content", "")
+        links: list[str] = inputs.get("links") or []
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d")
+
+        if filepath.exists():
+            existing = filepath.read_text(encoding="utf-8")
+            addition = f"\n\n---\n\n*Added: {timestamp}*\n\n{content}"
+            if links:
+                addition += "\n\n**Related:** " + " · ".join(f"[[{ln}]]" for ln in links)
+            filepath.write_text(existing + addition, encoding="utf-8")
+            action = "appended to"
+        else:
+            link_section = ""
+            if links:
+                link_section = "\n\n## Related\n\n" + "\n".join(f"- [[{ln}]]" for ln in links)
+            new_content = (
+                f"# {title}\n\n"
+                f"*Created: {timestamp}*\n\n"
+                f"{content}"
+                f"{link_section}\n"
+            )
+            filepath.write_text(new_content, encoding="utf-8")
+            action = "created"
+
+        # Update project INDEX.md
+        index_path = project_root / "_memory" / "INDEX.md"
+        if index_path.exists():
+            index_text = index_path.read_text(encoding="utf-8")
+            link_entry = f"- [[{section}/{safe_name}]] — {title}"
+            section_header = f"## {section.capitalize()}"
+            if section_header in index_text and link_entry not in index_text:
+                updated_index = index_text.replace(
+                    section_header,
+                    f"{section_header}\n{link_entry}",
+                    1,
+                )
+                index_path.write_text(updated_index, encoding="utf-8")
+
+        rel_path = f"_memory/{section}/{safe_name}.md"
+        return ToolResult(
+            success=True,
+            content=f"LTM page {action}: {rel_path}",
+            data={"path": rel_path, "action": action},
         )

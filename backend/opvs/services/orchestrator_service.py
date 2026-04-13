@@ -113,19 +113,55 @@ help with PM thinking, create notifications.
 Your project context and memory summary are below. Read them before responding.\
 """
 
-_COMPACTION_PROMPT_TEMPLATE = """\
-You are summarizing a conversation between a PM and their AI orchestrator.
-Create a dense, structured context summary that captures:
-1. Active tasks and their current status
-2. Key decisions made
-3. Open questions awaiting resolution
-4. Important context that will be needed in future sessions
+COMPACTION_PROMPT_TEMPLATE = """\
+You are summarizing a conversation and recent agent activity for a PM's AI operating system.
 
-Format as a markdown document with these exact sections.
-Keep it under 800 tokens. Do not include pleasantries or meta-commentary.
+Produce ONLY a structured markdown document using EXACTLY these sections.
+Do not add sections. Do not write prose outside these sections.
+Keep each section tight — prefer bullet points over paragraphs.
+Total output must be under 800 tokens.
+
+## Active tasks
+(Bullet list of tasks currently in progress. Format: "- [name]: [one-line status]")
+
+## Recent decisions
+(Bullet list of decisions made. Format: "- [YYYY-MM-DD]: [decision] — [brief reason]")
+
+## Open questions
+(Bullet list of unresolved questions. Format: "- [question] — waiting on: [who/what]")
+
+## Key context
+(2-3 sentences of essential background needed to understand current state.
+No history — only what matters RIGHT NOW.)
+
+## Recent agent outputs
+(Bullet list of completed agent sessions. Format: "- [AgentName]: [one-line summary]")
+
+---
 
 Conversation to summarize:
-{messages}\
+{messages}
+
+Recent agent activity log:
+{activity_log}\
+"""
+
+
+MESSAGE_DELTA_THRESHOLD = 10  # trigger delta update every N orchestrator messages
+
+DELTA_UPDATE_PROMPT = """\
+You are updating a PM's short-term memory document.
+
+Current STM:
+{current_stm}
+
+New information to integrate:
+{new_info}
+
+Update ONLY the relevant sections of the STM. Return the COMPLETE updated STM
+document preserving the exact section structure. Keep total under 800 tokens.
+Remove stale entries if new info supersedes them. Add new entries where relevant.
+Return only the markdown document, no preamble.\
 """
 
 
@@ -283,7 +319,10 @@ async def _build_system_prompt(
             )
             if project_index.exists():
                 content = project_index.read_text(encoding="utf-8").strip()
-                sections.append(f"## Project memory index\n\n{content}")
+                sections.append(
+                    f"## Project memory index\n\n{content}\n\n"
+                    f"*Use workspace_read_file to load specific memory pages.*"
+                )
 
             stm_file = await _get_stm_path(db, project_id)
             if stm_file.exists():
@@ -295,9 +334,12 @@ async def _build_system_prompt(
                 workspace_path / "projects" / project_slug / "_memory" / "activity_log.md"
             )
             if activity_log.exists():
-                log_content = activity_log.read_text(encoding="utf-8").strip()
-                if log_content:
-                    sections.append(f"## Recent agent activity\n\n{log_content}")
+                log_lines = activity_log.read_text(encoding="utf-8").splitlines()
+                entries = [ln for ln in log_lines if ln.startswith("- [")][-20:]
+                if entries:
+                    sections.append(
+                        "## Recent agent activity\n\n" + "\n".join(entries)
+                    )
 
     # 3. Dynamic system state
     from opvs.services import killswitch_service
@@ -1211,10 +1253,141 @@ async def send_message(
 
     await manager.broadcast(WS_CHAT_COMPLETE, {"message_id": assistant_msg.id})
 
-    # 8. Check compaction
+    # 8. Delta STM update (non-blocking, every MESSAGE_DELTA_THRESHOLD messages)
+    await _maybe_delta_update(db, project_id, full_text_response)
+
+    # 9. Check compaction
     await _compact_if_needed(db, total_tokens, project_id=project_id)
 
     return assistant_msg
+
+
+# ---------------------------------------------------------------------------
+# Delta STM updates
+# ---------------------------------------------------------------------------
+
+
+async def delta_update_stm(
+    db: AsyncSession,
+    new_info: str,
+    project_id: int | None = None,
+) -> None:
+    """
+    Lightweight STM update — integrates new_info into existing STM sections
+    without full compaction. Triggered after agent completions and every
+    MESSAGE_DELTA_THRESHOLD orchestrator messages.
+    """
+    import pathlib as _pathlib
+
+    workspace_path = await _get_workspace_path(db)
+    project_obj = await _get_project(db, project_id) if project_id is not None else None
+    project_slug = str(getattr(project_obj, "slug", "default")) if project_obj else "default"
+
+    stm_path = (
+        _pathlib.Path(str(workspace_path))
+        / "projects" / project_slug
+        / "_memory" / "stm" / "current.md"
+    )
+
+    current_stm = ""
+    if stm_path.exists():
+        current_stm = stm_path.read_text(encoding="utf-8")
+        if "No context has been compacted yet" in current_stm:
+            current_stm = ""
+
+    if not current_stm:
+        current_stm = (
+            "## Active tasks\n*(none yet)*\n\n"
+            "## Recent decisions\n*(none yet)*\n\n"
+            "## Open questions\n*(none yet)*\n\n"
+            "## Key context\n*(none yet)*\n\n"
+            "## Recent agent outputs\n*(none yet)*\n"
+        )
+
+    prompt = DELTA_UPDATE_PROMPT.format(
+        current_stm=current_stm,
+        new_info=new_info,
+    )
+
+    model = await _get_model(db)
+    provider = _detect_provider(model)
+    updated = ""
+
+    try:
+        if provider == "anthropic":
+            api_key = await _get_setting_value(db, "anthropic_api_key") or ""
+            client = anthropic.AsyncAnthropic(api_key=api_key if api_key else None)
+            response = await client.messages.create(
+                model=model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            if response.content:
+                updated = getattr(response.content[0], "text", "") or ""
+        else:
+            ollama_host = await _get_setting_value(db, "ollama_host") or "http://localhost:11434"
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                resp = await http_client.post(
+                    f"{ollama_host.rstrip('/')}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                    },
+                )
+                resp.raise_for_status()
+                updated = resp.json().get("message", {}).get("content", "")
+    except Exception as e:
+        logger.warning("Delta STM update failed: %s", e)
+        return
+
+    if updated.strip():
+        stm_path.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            f"# Short-term memory\n\n"
+            f"*Last delta update: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}*\n\n"
+        )
+        if updated.startswith("# Short-term memory"):
+            stm_path.write_text(updated, encoding="utf-8")
+        else:
+            stm_path.write_text(header + updated, encoding="utf-8")
+
+
+async def _maybe_delta_update(
+    db: AsyncSession,
+    project_id: int | None,
+    latest_content: str,
+) -> None:
+    """Trigger delta STM update every MESSAGE_DELTA_THRESHOLD messages."""
+    from sqlalchemy import func as sql_func
+    from sqlalchemy import select as sa_select
+
+    summary_query = (
+        sa_select(ChatMessage)
+        .where(
+            ChatMessage.is_compact_summary == True,  # noqa: E712
+            ChatMessage.project_id == project_id,
+        )
+        .order_by(ChatMessage.created_at.desc())
+        .limit(1)
+    )
+    result = await db.execute(summary_query)
+    latest_summary = result.scalar_one_or_none()
+
+    count_query = sa_select(sql_func.count(ChatMessage.id)).where(
+        ChatMessage.project_id == project_id,
+        ChatMessage.is_compact_summary == False,  # noqa: E712
+    )
+    if latest_summary is not None:
+        count_query = count_query.where(
+            ChatMessage.created_at > latest_summary.created_at
+        )
+    count_result = await db.execute(count_query)
+    count = count_result.scalar() or 0
+
+    if count > 0 and count % MESSAGE_DELTA_THRESHOLD == 0:
+        new_info = f"Recent orchestrator exchange summary: {latest_content[:400]}"
+        asyncio.create_task(delta_update_stm(db, new_info, project_id))
 
 
 # ---------------------------------------------------------------------------
@@ -1276,6 +1449,8 @@ async def _compact_if_needed(
 
 
 async def _run_compaction(db: AsyncSession, project_id: int | None = None) -> None:
+    import pathlib as _pathlib
+
     project_filter = (
         ChatMessage.project_id == project_id if project_id is not None else None
     )
@@ -1294,10 +1469,26 @@ async def _run_compaction(db: AsyncSession, project_id: int | None = None) -> No
     if not all_messages:
         return
 
-    conversation_text = "\n".join(
-        f"{m.role.value.upper()}: {m.content}" for m in all_messages
+    # Load activity log for context
+    workspace_path = await _get_workspace_path(db)
+    project_obj = await _get_project(db, project_id) if project_id is not None else None
+    project_slug = str(getattr(project_obj, "slug", "default")) if project_obj else "default"
+    activity_log_path = (
+        _pathlib.Path(str(workspace_path))
+        / "projects" / project_slug
+        / "_memory" / "activity_log.md"
     )
-    compaction_prompt = _COMPACTION_PROMPT_TEMPLATE.format(messages=conversation_text)
+    activity_log = ""
+    if activity_log_path.exists():
+        activity_log = activity_log_path.read_text(encoding="utf-8")[-2000:]
+
+    messages_text = "\n".join(
+        f"[{m.role.value.upper()}]: {m.content[:500]}" for m in all_messages
+    )
+    compaction_prompt = COMPACTION_PROMPT_TEMPLATE.format(
+        messages=messages_text,
+        activity_log=activity_log or "(no recent agent activity)",
+    )
     compaction_messages: list[anthropic.types.MessageParam] = [
         {"role": "user", "content": compaction_prompt}
     ]
@@ -1339,12 +1530,12 @@ async def _run_compaction(db: AsyncSession, project_id: int | None = None) -> No
     stm_file = await _get_stm_path(db, project_id)
     stm_file.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.utcnow()
-    stm_content = f"""# Short-term memory
-*Compacted: {now.isoformat()}*
-*Covers: {len(all_messages)} messages*
-
-{summary_text}
-"""
+    stm_content = (
+        f"# Short-term memory\n\n"
+        f"*Compacted: {now.strftime('%Y-%m-%d %H:%M UTC')}*\n"
+        f"*Covers: {len(all_messages)} messages*\n\n"
+        f"{summary_text}\n"
+    )
     stm_file.write_text(stm_content, encoding="utf-8")
 
     # 4. Save summary as chat_message
