@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { listPersonas } from '@/api/personas'
 import { getChatroomMessages, listSessions, postChatroomReply } from '@/api/sessions'
 import { useAppStore } from '@/stores/useAppStore'
 import type { AgentMessage } from '@/types/api'
@@ -134,9 +135,23 @@ export function ChatroomPanel() {
     ['queued', 'running', 'waiting'].includes(s.status),
   ).length ?? 0
 
-  const agentSuggestions = sessions
-    ?.filter((s) => ['queued', 'running', 'waiting'].includes(s.status))
-    .map((s) => ({ name: s.persona_name, uuid: s.session_uuid })) ?? []
+  // All personas for @ suggestions — active sessions just provide status dot
+  const { data: personas } = useQuery({
+    queryKey: ['personas'],
+    queryFn: () => listPersonas(),
+    staleTime: 30_000,
+  })
+
+  const activePersonaNames = new Set(
+    sessions
+      ?.filter((s) => ['queued', 'running', 'waiting'].includes(s.status))
+      .map((s) => s.persona_name) ?? [],
+  )
+
+  const agentSuggestions = personas?.map((p) => ({
+    name: p.name,
+    active: activePersonaNames.has(p.name),
+  })) ?? []
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -252,13 +267,20 @@ export function ChatroomPanel() {
                             border border-zinc-700 rounded-md shadow-lg py-1 z-10">
               {filteredSuggestions.map((agent) => (
                 <button
-                  key={agent.uuid}
+                  key={agent.name}
                   onClick={() => selectSuggestion(agent.name)}
                   className="w-full text-left px-3 py-1.5 text-xs text-zinc-200
                              hover:bg-zinc-700 flex items-center gap-2"
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      agent.active ? 'bg-green-400' : 'bg-zinc-600'
+                    }`}
+                  />
                   {agent.name}
+                  {!agent.active && (
+                    <span className="text-zinc-600 ml-auto">offline</span>
+                  )}
                 </button>
               ))}
             </div>
