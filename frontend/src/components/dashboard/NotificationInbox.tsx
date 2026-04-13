@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, XIcon } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, XIcon } from 'lucide-react'
+import { useState } from 'react'
 import { getNotifications, updateNotificationStatus } from '@/api/notifications'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,9 +31,11 @@ const sourceVariant: Record<
 interface NotificationCardProps {
   notification: Notification
   showActions: boolean
+  isExpanded: boolean
+  onToggle: () => void
 }
 
-function NotificationCard({ notification, showActions }: NotificationCardProps) {
+function NotificationCard({ notification, showActions, isExpanded, onToggle }: NotificationCardProps) {
   const qc = useQueryClient()
 
   const updateMutation = useMutation({
@@ -51,47 +54,59 @@ function NotificationCard({ notification, showActions }: NotificationCardProps) 
         : relativeTime(notification.updated_at)
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 space-y-2">
+    <div
+      className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 space-y-2 cursor-pointer hover:border-zinc-700 transition-colors"
+      onClick={onToggle}
+    >
       <div className="flex items-start justify-between gap-2">
         <span className="font-medium text-sm text-zinc-100 leading-tight">
           {notification.title}
         </span>
-        <span className="text-xs text-zinc-500 shrink-0">{timestamp}</span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="text-xs text-zinc-500">{timestamp}</span>
+          {isExpanded
+            ? <ChevronUpIcon className="h-3 w-3 text-zinc-600" />
+            : <ChevronDownIcon className="h-3 w-3 text-zinc-600" />
+          }
+        </div>
       </div>
-      <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
+      <p className={`text-xs text-zinc-400 leading-relaxed ${isExpanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}>
         {notification.body}
       </p>
       <div className="flex items-center justify-between">
         <Badge variant={sourceVariant[notification.source_type]}>
           {notification.source_type}
         </Badge>
-        {showActions && (
-          <div className="flex gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2 text-xs text-green-400 hover:text-green-300 hover:bg-green-950"
-              onClick={() => updateMutation.mutate('completed')}
-              disabled={updateMutation.isPending}
-              aria-label="Mark as complete"
-            >
-              <CheckIcon className="h-3 w-3 mr-1" />
-              Complete
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2 text-xs text-zinc-400 hover:text-zinc-300 hover:bg-zinc-800"
-              onClick={() => updateMutation.mutate('dismissed')}
-              disabled={updateMutation.isPending}
-              aria-label="Dismiss notification"
-            >
-              <XIcon className="h-3 w-3 mr-1" />
-              Dismiss
-            </Button>
-          </div>
-        )}
       </div>
+      {isExpanded && showActions && (
+        <div
+          className="flex gap-1 pt-2 border-t border-zinc-800"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-xs text-green-400 hover:text-green-300 hover:bg-green-950"
+            onClick={() => updateMutation.mutate('completed')}
+            disabled={updateMutation.isPending}
+            aria-label="Mark as complete"
+          >
+            <CheckIcon className="h-3 w-3 mr-1" />
+            Complete
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-xs text-zinc-400 hover:text-zinc-300 hover:bg-zinc-800"
+            onClick={() => updateMutation.mutate('dismissed')}
+            disabled={updateMutation.isPending}
+            aria-label="Dismiss notification"
+          >
+            <XIcon className="h-3 w-3 mr-1" />
+            Dismiss
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -107,6 +122,15 @@ function EmptyState({ message }: { message: string }) {
 
 export function NotificationInbox() {
   const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+
+  const toggleExpand = (id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
 
   const { data: pending = [], isLoading: pendingLoading } = useQuery({
     queryKey: ['notifications', 'pending', activeProjectId],
@@ -147,7 +171,13 @@ export function NotificationInbox() {
             <EmptyState message="No pending notifications" />
           ) : (
             pending.map((n) => (
-              <NotificationCard key={n.id} notification={n} showActions />
+              <NotificationCard
+                key={n.id}
+                notification={n}
+                showActions
+                isExpanded={expandedIds.has(n.id)}
+                onToggle={() => toggleExpand(n.id)}
+              />
             ))
           )}
         </TabsContent>
@@ -161,7 +191,13 @@ export function NotificationInbox() {
             <EmptyState message="No completed notifications yet" />
           ) : (
             completed.map((n) => (
-              <NotificationCard key={n.id} notification={n} showActions={false} />
+              <NotificationCard
+                key={n.id}
+                notification={n}
+                showActions={false}
+                isExpanded={expandedIds.has(n.id)}
+                onToggle={() => toggleExpand(n.id)}
+              />
             ))
           )}
         </TabsContent>
