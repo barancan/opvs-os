@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, useDefaultLayout } from 'react-resizable-panels'
 import { listProjects } from '@/api/projects'
 import { listSessions } from '@/api/sessions'
 import { KillSwitchButton } from '@/components/dashboard/KillSwitchButton'
@@ -73,8 +74,11 @@ export default function Dashboard() {
 
   const activeProject = projects?.find((p) => p.id === activeProjectId)
 
+  const verticalLayout = useDefaultLayout({ id: 'dashboard-vertical', storage: localStorage })
+  const horizontalLayout = useDefaultLayout({ id: 'dashboard-horizontal', storage: localStorage })
+
   return (
-    <div className="flex flex-col h-full p-6 gap-4 overflow-hidden">
+    <div className="flex flex-col h-full p-4 gap-3 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between flex-shrink-0">
         <h1 className="text-xl font-semibold text-zinc-100">
@@ -83,24 +87,67 @@ export default function Dashboard() {
         <KillSwitchButton />
       </div>
 
-      {/* Main content — takes remaining space above chat */}
-      <div className="flex gap-4 flex-1 min-h-0 overflow-hidden">
-        {/* Notifications — left, 60% width */}
-        <div className="flex-[3] overflow-y-auto min-h-0">
-          <NotificationInbox />
-        </div>
+      {/* Resizable main area */}
+      <PanelGroup
+        orientation="vertical"
+        className="flex-1 min-h-0"
+        defaultLayout={verticalLayout.defaultLayout}
+        onLayoutChanged={verticalLayout.onLayoutChanged}
+      >
 
-        {/* Active Agents — right, 40% width */}
-        <div className="flex-[2] rounded-lg border border-zinc-800 p-4 overflow-y-auto">
-          <h2 className="text-sm font-medium text-zinc-400 mb-3">Active Agents</h2>
-          <ActiveAgentsMini projectId={activeProjectId} />
-        </div>
-      </div>
+        {/* Top row: Notifications + Active Agents */}
+        <Panel defaultSize={55} minSize={20}>
+          <PanelGroup
+            orientation="horizontal"
+            className="h-full"
+            defaultLayout={horizontalLayout.defaultLayout}
+            onLayoutChanged={horizontalLayout.onLayoutChanged}
+          >
 
-      {/* Chat — pinned at bottom, fixed height */}
-      <div className="flex-shrink-0">
-        <OrchestratorChat />
-      </div>
+            {/* Notifications */}
+            <Panel defaultSize={60} minSize={20}>
+              <div className="h-full overflow-y-auto pr-1">
+                <NotificationInbox />
+              </div>
+            </Panel>
+
+            <PanelResizeHandle className="group relative w-1.5 mx-1 cursor-col-resize">
+              <div className="absolute inset-0 rounded-full bg-zinc-800 group-hover:bg-zinc-500 transition-colors" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100">
+                <div className="w-0.5 h-0.5 rounded-full bg-zinc-400" />
+                <div className="w-0.5 h-0.5 rounded-full bg-zinc-400" />
+                <div className="w-0.5 h-0.5 rounded-full bg-zinc-400" />
+              </div>
+            </PanelResizeHandle>
+
+            {/* Active Agents */}
+            <Panel defaultSize={40} minSize={15}>
+              <div className="h-full border border-zinc-800 rounded-lg p-3 overflow-y-auto">
+                <h2 className="text-xs font-medium text-zinc-400 mb-2">Active Agents</h2>
+                <ActiveAgentsMini projectId={activeProjectId} />
+              </div>
+            </Panel>
+
+          </PanelGroup>
+        </Panel>
+
+        <PanelResizeHandle className="group relative h-1.5 my-1 cursor-row-resize">
+          <div className="absolute inset-0 rounded-full bg-zinc-800 group-hover:bg-zinc-500 transition-colors" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-row gap-0.5 opacity-0 group-hover:opacity-100">
+            <div className="w-0.5 h-0.5 rounded-full bg-zinc-400" />
+            <div className="w-0.5 h-0.5 rounded-full bg-zinc-400" />
+            <div className="w-0.5 h-0.5 rounded-full bg-zinc-400" />
+          </div>
+        </PanelResizeHandle>
+
+        {/* Bottom: Orchestrator Chat */}
+        <Panel defaultSize={45} minSize={20}>
+          <div className="h-full">
+            <OrchestratorChat />
+          </div>
+        </Panel>
+
+      </PanelGroup>
     </div>
   )
 }
