@@ -387,6 +387,7 @@ async def _run_session(
                 persona_name=session.persona_name,
                 task=session.task,
                 result=full_response,
+                project_id=project_id,
             )
 
             await create_notification(
@@ -645,6 +646,7 @@ async def _write_session_memory(
     persona_name: str,
     task: str,
     result: str,
+    project_id: int,
 ) -> None:
     """Write session output to project memory on completion."""
     import pathlib
@@ -686,6 +688,23 @@ async def _write_session_memory(
             + entry,
             encoding="utf-8",
         )
+
+    # 3. Delta STM update with session summary
+    try:
+        from opvs.database import AsyncSessionLocal
+        from opvs.services.orchestrator_service import delta_update_stm
+
+        async with AsyncSessionLocal() as db:
+            new_info = (
+                f"Agent session completed:\n"
+                f"- Agent: {persona_name}\n"
+                f"- Task: {task[:200]}\n"
+                f"- Output summary: {result[:300]}\n"
+                f"- Full output: see inbox/{inbox_file.name}"
+            )
+            await delta_update_stm(db, new_info, project_id=project_id)
+    except Exception:
+        pass  # non-fatal
 
 
 async def reply_offline_mention(

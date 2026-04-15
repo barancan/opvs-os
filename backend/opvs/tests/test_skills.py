@@ -13,6 +13,11 @@ Tests:
  9.  PUT /api/projects/{id}/skills/workspace?enabled=false still returns enabled=True (always_on)
 10.  LinearSkill.get_tool_definitions — all read tools have requires_approval=False
 11.  LinearSkill.get_tool_definitions — all write tools have requires_approval=True
+12.  workspace_write_ltm creates a new LTM page in the correct section
+13.  workspace_write_ltm appends to an existing LTM page
+14.  workspace_write_ltm updates INDEX.md with a wikilink entry
+15.  workspace_write_ltm rejects invalid section names
+16.  workspace_write_ltm has requires_approval=True
 """
 
 import pathlib
@@ -203,6 +208,149 @@ async def test_workspace_always_on_cannot_be_disabled(client: AsyncClient) -> No
     data = resp.json()
     assert data["enabled"] is True
     assert data["always_on"] is True
+
+
+# ---------------------------------------------------------------------------
+# 12. workspace_write_ltm creates a new LTM page in the correct section
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_write_ltm_creates_new_page(tmp_path: pathlib.Path) -> None:
+    project_root = tmp_path / "projects" / "my-project"
+    project_root.mkdir(parents=True)
+
+    skill = WorkspaceSkill()
+    context = SkillContext(
+        api_keys={},
+        workspace_path=str(tmp_path),
+        project_slug="my-project",
+        project_id=1,
+    )
+    result = await skill.execute_tool(
+        "workspace_write_ltm",
+        {
+            "section": "research",
+            "filename": "stablecoin-latam",
+            "title": "Stablecoin LATAM Research",
+            "content": "Key finding: adoption is growing in Brazil.",
+        },
+        context,
+    )
+
+    assert result.success is True
+    assert "created" in result.content
+    ltm_file = project_root / "_memory" / "research" / "stablecoin-latam.md"
+    assert ltm_file.exists()
+    text = ltm_file.read_text()
+    assert "Stablecoin LATAM Research" in text
+    assert "adoption is growing in Brazil" in text
+
+
+# ---------------------------------------------------------------------------
+# 13. workspace_write_ltm appends to an existing LTM page
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_write_ltm_appends_to_existing_page(tmp_path: pathlib.Path) -> None:
+    project_root = tmp_path / "projects" / "my-project"
+    (project_root / "_memory" / "decisions").mkdir(parents=True)
+    existing_file = project_root / "_memory" / "decisions" / "payment-flow.md"
+    existing_file.write_text("# Payment Flow\n\nOriginal content.\n")
+
+    skill = WorkspaceSkill()
+    context = SkillContext(
+        api_keys={},
+        workspace_path=str(tmp_path),
+        project_slug="my-project",
+        project_id=1,
+    )
+    result = await skill.execute_tool(
+        "workspace_write_ltm",
+        {
+            "section": "decisions",
+            "filename": "payment-flow",
+            "title": "Payment Flow",
+            "content": "New addendum: switched to Stripe.",
+        },
+        context,
+    )
+
+    assert result.success is True
+    assert "appended to" in result.content
+    text = existing_file.read_text()
+    assert "Original content." in text
+    assert "New addendum: switched to Stripe." in text
+
+
+# ---------------------------------------------------------------------------
+# 14. workspace_write_ltm updates INDEX.md with a wikilink entry
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_write_ltm_updates_index(tmp_path: pathlib.Path) -> None:
+    project_root = tmp_path / "projects" / "my-project"
+    (project_root / "_memory").mkdir(parents=True)
+    index_file = project_root / "_memory" / "INDEX.md"
+    index_file.write_text("# Memory Index\n\n## Research\n\n## Decisions\n")
+
+    skill = WorkspaceSkill()
+    context = SkillContext(
+        api_keys={},
+        workspace_path=str(tmp_path),
+        project_slug="my-project",
+        project_id=1,
+    )
+    await skill.execute_tool(
+        "workspace_write_ltm",
+        {
+            "section": "research",
+            "filename": "market-analysis",
+            "title": "Market Analysis",
+            "content": "Details here.",
+        },
+        context,
+    )
+
+    index_text = index_file.read_text()
+    assert "[[research/market-analysis]]" in index_text
+    assert "Market Analysis" in index_text
+
+
+# ---------------------------------------------------------------------------
+# 15. workspace_write_ltm rejects invalid section names
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_write_ltm_rejects_invalid_section(tmp_path: pathlib.Path) -> None:
+    project_root = tmp_path / "projects" / "my-project"
+    project_root.mkdir(parents=True)
+
+    skill = WorkspaceSkill()
+    context = SkillContext(
+        api_keys={},
+        workspace_path=str(tmp_path),
+        project_slug="my-project",
+        project_id=1,
+    )
+    result = await skill.execute_tool(
+        "workspace_write_ltm",
+        {
+            "section": "secrets",
+            "filename": "passwords",
+            "title": "Passwords",
+            "content": "hunter2",
+        },
+        context,
+    )
+
+    assert result.success is False
+    assert "Invalid section" in result.content
+
+
+# ---------------------------------------------------------------------------
+# 16. workspace_write_ltm has requires_approval=True
+# ---------------------------------------------------------------------------
+def test_write_ltm_requires_approval() -> None:
+    skill = WorkspaceSkill()
+    tool_defs = skill.get_tool_definitions()
+    ltm_tool = next(t for t in tool_defs if t.name == "workspace_write_ltm")
+    assert ltm_tool.requires_approval is True
 
 
 # ---------------------------------------------------------------------------
