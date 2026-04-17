@@ -14,6 +14,7 @@ from opvs.services.agent_runner import (
     _build_agent_system_prompt,
     _format_chatroom_history,
     _relative_time,
+    _tool_event_summary,
 )
 
 
@@ -313,3 +314,81 @@ async def test_system_prompt_excludes_messages_outside_window(
 
     assert "This is ancient history" not in prompt
     assert "This is recent" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _tool_event_summary — deterministic summary from tool name + inputs
+# ---------------------------------------------------------------------------
+
+def test_tool_event_summary_workspace_read_file() -> None:
+    assert _tool_event_summary("workspace_read_file", {"path": "_memory/stm/current.md"}) == \
+        "Read _memory/stm/current.md"
+
+
+def test_tool_event_summary_workspace_list_files_with_directory() -> None:
+    result = _tool_event_summary("workspace_list_files", {"directory": "_memory"})
+    assert result == "Listed files in _memory"
+
+
+def test_tool_event_summary_workspace_list_files_empty_directory() -> None:
+    result = _tool_event_summary("workspace_list_files", {})
+    assert result == "Listed files in project root"
+
+
+def test_tool_event_summary_workspace_capture() -> None:
+    result = _tool_event_summary("workspace_capture", {"title": "Auth decisions", "content": "..."})
+    assert result == "Captured: Auth decisions"
+
+
+def test_tool_event_summary_workspace_write_ltm() -> None:
+    result = _tool_event_summary(
+        "workspace_write_ltm",
+        {"section": "decisions", "filename": "auth-migration", "title": "T", "content": "C"},
+    )
+    assert result == "LTM write: decisions/auth-migration"
+
+
+def test_tool_event_summary_linear_get_issue() -> None:
+    result = _tool_event_summary("linear_get_issue", {"issue_id": "OPS-142"})
+    assert result == "Fetched issue OPS-142"
+
+
+def test_tool_event_summary_linear_search_issues() -> None:
+    result = _tool_event_summary("linear_search_issues", {"query": "payment bug"})
+    assert "payment bug" in result
+
+
+def test_tool_event_summary_linear_create_issue() -> None:
+    result = _tool_event_summary("linear_create_issue", {"title": "Fix login timeout", "team_id": "T1"})
+    assert "Fix login timeout" in result
+
+
+def test_tool_event_summary_unknown_tool() -> None:
+    result = _tool_event_summary("some_future_tool", {"x": 1})
+    assert "some_future_tool" in result
+
+
+# ---------------------------------------------------------------------------
+# system_prompt excludes EVENT messages from chatroom history injection
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_system_prompt_excludes_event_messages(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_msg = _make_message(
+        "ResearchBot", "Read _memory/stm/current.md", SenderType.EVENT, minutes_ago=5
+    )
+    user_msg = _make_message("Alice", "Good, keep going", SenderType.USER, minutes_ago=3)
+    db_session.add(event_msg)
+    db_session.add(user_msg)
+    await db_session.commit()
+
+    session = _make_session("AnotherBot")
+    monkeypatch.setattr(agent_runner, "_get_workspace_path", AsyncMock(return_value="/tmp/ws"))
+
+    prompt = await _build_agent_system_prompt(db_session, session, project_id=1)
+
+    assert "Read _memory/stm/current.md" not in prompt
+    assert "Good, keep going" in prompt
