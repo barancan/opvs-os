@@ -1,7 +1,20 @@
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from opvs.models.agent_message import AgentMessage, SenderType
+from opvs.models.agent_session import AgentSession
 from opvs.services import agent_runner
+from opvs.services.agent_runner import (
+    CHATROOM_HISTORY_LIMIT,
+    CHATROOM_HISTORY_WINDOW_HOURS,
+    _build_agent_system_prompt,
+    _format_chatroom_history,
+    _relative_time,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -132,3 +145,171 @@ async def test_concurrency_limit_returns_409(
     )
     assert response.status_code == 409
     assert "Concurrency limit" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Helpers for chatroom history tests
+# ---------------------------------------------------------------------------
+
+def _make_message(
+    sender_name: str,
+    content: str,
+    sender_type: SenderType = SenderType.USER,
+    minutes_ago: int = 10,
+    project_id: int = 1,
+) -> AgentMessage:
+    msg = AgentMessage(
+        project_id=project_id,
+        sender_type=sender_type,
+        sender_name=sender_name,
+        content=content,
+    )
+    msg.created_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    return msg
+
+
+def _make_session(name: str = "TestBot") -> AgentSession:
+    session = MagicMock(spec=AgentSession)
+    session.persona_name = name
+    session.instructions_snapshot = "Be helpful."
+    return session  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# 8. _relative_time formats correctly
+# ---------------------------------------------------------------------------
+
+def test_relative_time_just_now() -> None:
+    dt = datetime.now(UTC) - timedelta(seconds=30)
+    assert _relative_time(dt) == "just now"
+
+
+def test_relative_time_minutes() -> None:
+    dt = datetime.now(UTC) - timedelta(minutes=45)
+    assert _relative_time(dt) == "45m ago"
+
+
+def test_relative_time_hours() -> None:
+    dt = datetime.now(UTC) - timedelta(hours=3)
+    assert _relative_time(dt) == "3h ago"
+
+
+# ---------------------------------------------------------------------------
+# 9. _format_chatroom_history renders sender name, timestamp, and content
+# ---------------------------------------------------------------------------
+
+def test_format_chatroom_history_includes_sender_and_content() -> None:
+    messages = [
+        _make_message("Alice", "Can you check the auth issue?", minutes_ago=20),
+        _make_message("ResearchBot", "Found 3 related tickets.", SenderType.AGENT, minutes_ago=10),
+    ]
+    output = _format_chatroom_history(messages)
+    assert "Alice" in output
+    assert "Can you check the auth issue?" in output
+    assert "ResearchBot" in output
+    assert "Found 3 related tickets." in output
+
+
+def test_format_chatroom_history_preserves_order() -> None:
+    messages = [
+        _make_message("Alice", "First message", minutes_ago=30),
+        _make_message("Bob", "Second message", minutes_ago=10),
+    ]
+    output = _format_chatroom_history(messages)
+    assert output.index("First message") < output.index("Second message")
+
+
+# ---------------------------------------------------------------------------
+# 10. _build_agent_system_prompt injects history / shows empty placeholder
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_system_prompt_injects_chatroom_history(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent_msg = _make_message("Alice", "Please look into the payment bug", minutes_ago=30)
+    db_session.add(recent_msg)
+    await db_session.commit()
+
+    session = _make_session("BugBot")
+
+    monkeypatch.setattr(
+        agent_runner, "_get_workspace_path", AsyncMock(return_value="/tmp/ws")
+    )
+
+    prompt = await _build_agent_system_prompt(db_session, session, project_id=1)
+
+    assert "Alice" in prompt
+    assert "Please look into the payment bug" in prompt
+    assert "Recent chatroom activity" in prompt
+    assert "(No recent activity)" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_shows_empty_placeholder_when_no_history(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _make_session("EmptyBot")
+
+    monkeypatch.setattr(
+        agent_runner, "_get_workspace_path", AsyncMock(return_value="/tmp/ws")
+    )
+
+    prompt = await _build_agent_system_prompt(db_session, session, project_id=999)
+
+    assert "Recent chatroom activity" in prompt
+    assert "(No recent activity)" in prompt
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_excludes_system_sender_type(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system_msg = _make_message(
+        "System", "Task complete. Output sent to notifications.", SenderType.SYSTEM, minutes_ago=5
+    )
+    user_msg = _make_message("Alice", "Great work!", SenderType.USER, minutes_ago=3)
+    db_session.add(system_msg)
+    db_session.add(user_msg)
+    await db_session.commit()
+
+    session = _make_session("FilterBot")
+
+    monkeypatch.setattr(
+        agent_runner, "_get_workspace_path", AsyncMock(return_value="/tmp/ws")
+    )
+
+    prompt = await _build_agent_system_prompt(db_session, session, project_id=1)
+
+    assert "Task complete. Output sent to notifications." not in prompt
+    assert "Great work!" in prompt
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_excludes_messages_outside_window(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_msg = _make_message(
+        "Alice",
+        "This is ancient history",
+        minutes_ago=(CHATROOM_HISTORY_WINDOW_HOURS * 60) + 30,
+    )
+    recent_msg = _make_message("Bob", "This is recent", minutes_ago=10)
+    db_session.add(old_msg)
+    db_session.add(recent_msg)
+    await db_session.commit()
+
+    session = _make_session("WindowBot")
+
+    monkeypatch.setattr(
+        agent_runner, "_get_workspace_path", AsyncMock(return_value="/tmp/ws")
+    )
+
+    prompt = await _build_agent_system_prompt(db_session, session, project_id=1)
+
+    assert "This is ancient history" not in prompt
+    assert "This is recent" in prompt
