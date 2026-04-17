@@ -394,7 +394,7 @@ async def _run_session(
                 db,
                 NotificationCreate(
                     title=f"Agent complete: {session.persona_name}",
-                    body=full_response[:500],
+                    body=full_response,
                     source_type=NotificationSourceType.AGENT,
                     agent_id=str(session.persona_id),
                     session_id=session_uuid,
@@ -441,13 +441,13 @@ async def _run_session(
             logger.error("Session %s failed: %s", session_uuid, e)
             session.status = SessionStatus.FAILED
             session.completed_at = datetime.now(UTC)
-            session.error_message = str(e)[:500]
+            session.error_message = f"{type(e).__name__}: {e}"
             await db.commit()
             await create_notification(
                 db,
                 NotificationCreate(
                     title=f"Agent failed: {session.persona_name}",
-                    body=str(e)[:300],
+                    body=f"{type(e).__name__}: {e}",
                     source_type=NotificationSourceType.AGENT,
                     agent_id=str(session.persona_id),
                     session_id=session_uuid,

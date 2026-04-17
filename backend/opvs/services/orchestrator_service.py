@@ -789,7 +789,7 @@ async def _call_llm(
                 title="Ollama unavailable",
                 body=(
                     f"Could not reach Ollama ({model}). "
-                    f"Fell back to {fallback_model}. Error: {str(e)[:200]}"
+                    f"Fell back to {fallback_model}. {type(e).__name__}: {e}"
                 ),
                 source_type=NotificationSourceType.SYSTEM,
             ),
@@ -1225,7 +1225,7 @@ async def send_message(
     except Exception as e:
         logger.error("orchestrator send_message error: %s", e, exc_info=True)
         await manager.send_to(client_id, WS_CHAT_ERROR, {"error": str(e)})
-        error_msg_text = f"An error occurred: {e}"
+        error_msg_text = f"An error occurred: {type(e).__name__}: {e}"
         error_record = ChatMessage(
             role=MessageRole.ASSISTANT,
             content=error_msg_text,
