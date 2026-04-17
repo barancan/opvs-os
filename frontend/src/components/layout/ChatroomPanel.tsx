@@ -28,7 +28,18 @@ function ChatroomMessage({
   const isAgent = message.sender_type === 'agent'
   const isUser = message.sender_type === 'user'
   const isSystem = message.sender_type === 'system'
+  const isEvent = message.sender_type === 'event'
   const needsResponse = message.requires_response && !message.response_provided
+
+  // Tool-status events: compact single line, no interaction, reduced prominence
+  if (isEvent) {
+    return (
+      <div className="flex items-center gap-1.5 px-1 py-0.5">
+        <span className="text-zinc-600 text-[10px] flex-shrink-0">⚙</span>
+        <span className="text-zinc-600 text-[10px] truncate">{message.content}</span>
+      </div>
+    )
+  }
 
   return (
     <div

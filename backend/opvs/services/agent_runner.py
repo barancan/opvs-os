@@ -360,6 +360,15 @@ async def _run_session(
                         tool_result = await skill.execute_tool(
                             tool_name, tool_input, skill_context
                         )
+                        if tool_result.success:
+                            asyncio.create_task(
+                                _post_tool_event(
+                                    session_uuid,
+                                    project_id,
+                                    session.persona_name,
+                                    _tool_event_summary(tool_name, tool_input),
+                                )
+                            )
                         tool_results.append(
                             {
                                 "type": "tool_result",
@@ -472,6 +481,84 @@ async def _run_session(
             _mention_queues.pop(session_uuid, None)
 
 
+def _tool_event_summary(tool_name: str, inputs: dict[str, Any]) -> str:
+    """Derive a concise one-liner from tool name + inputs. No LLM call."""
+    if tool_name == "workspace_read_file":
+        return f"Read {inputs.get('path', '?')}"
+    if tool_name == "workspace_list_files":
+        path = inputs.get("directory", "") or "project root"
+        return f"Listed files in {path}"
+    if tool_name == "workspace_capture":
+        return f"Captured: {str(inputs.get('title', '?'))[:60]}"
+    if tool_name == "workspace_write_ltm":
+        return f"LTM write: {inputs.get('section', '?')}/{inputs.get('filename', '?')}"
+    if tool_name == "linear_list_teams":
+        return "Fetched Linear teams"
+    if tool_name == "linear_list_projects":
+        team = inputs.get("team_id")
+        return f"Fetched Linear projects{f' (team {team})' if team else ''}"
+    if tool_name == "linear_list_issues":
+        parts = []
+        if inputs.get("status"):
+            parts.append(f"status={inputs['status']}")
+        if inputs.get("priority") is not None:
+            parts.append(f"priority={inputs['priority']}")
+        suffix = f" ({', '.join(parts)})" if parts else ""
+        return f"Fetched Linear issues{suffix}"
+    if tool_name == "linear_get_issue":
+        return f"Fetched issue {inputs.get('issue_id', '?')}"
+    if tool_name == "linear_search_issues":
+        query = str(inputs.get("query", "?"))[:50]
+        return f"Searched issues: \"{query}\""
+    if tool_name == "linear_create_issue":
+        title = str(inputs.get("title", "?"))[:60]
+        return f"Created issue: \"{title}\""
+    if tool_name == "linear_update_issue":
+        return f"Updated issue {inputs.get('issue_id', '?')}"
+    if tool_name == "linear_create_comment":
+        return f"Posted comment on {inputs.get('issue_id', '?')}"
+    return f"Ran {tool_name}"
+
+
+async def _post_tool_event(
+    session_uuid: str,
+    project_id: int,
+    persona_name: str,
+    summary: str,
+) -> None:
+    """Write a tool-status event to the chatroom in its own DB session. Fire-and-forget."""
+    from opvs.websocket import WS_AGENT_MESSAGE, manager
+
+    try:
+        async with AsyncSessionLocal() as db:
+            msg = AgentMessage(
+                project_id=project_id,
+                session_uuid=session_uuid,
+                sender_type=SenderType.EVENT,
+                sender_name=persona_name,
+                content=summary,
+            )
+            db.add(msg)
+            await db.commit()
+            await db.refresh(msg)
+            await manager.broadcast(
+                WS_AGENT_MESSAGE,
+                {
+                    "id": msg.id,
+                    "project_id": project_id,
+                    "session_uuid": session_uuid,
+                    "sender_type": "event",
+                    "sender_name": persona_name,
+                    "content": summary,
+                    "requires_response": False,
+                    "response_provided": False,
+                    "created_at": msg.created_at.isoformat(),
+                },
+            )
+    except Exception:
+        logger.exception("Failed to post tool event for session %s", session_uuid)
+
+
 def _relative_time(dt: datetime) -> str:
     """Return a human-readable relative timestamp, e.g. '5m ago' or '2h ago'."""
     aware = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
@@ -526,13 +613,16 @@ async def _build_agent_system_prompt(
     )
     stm = stm_path.read_text() if stm_path.exists() else ""
 
-    # Load recent chatroom activity, excluding system boilerplate messages.
+    # Load recent chatroom activity. Exclude SYSTEM boilerplate and EVENT
+    # tool-status rows — both are noise in the agent's reasoning context.
     cutoff = datetime.now(UTC) - timedelta(hours=CHATROOM_HISTORY_WINDOW_HOURS)
     history_result = await db.execute(
         sa_select(_AgentMessage)
         .where(
             _AgentMessage.project_id == project_id,
-            _AgentMessage.sender_type != _SenderType.SYSTEM,
+            _AgentMessage.sender_type.not_in(
+                [_SenderType.SYSTEM, _SenderType.EVENT]
+            ),
             _AgentMessage.created_at >= cutoff,
         )
         .order_by(_AgentMessage.created_at.desc())

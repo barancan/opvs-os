@@ -222,7 +222,7 @@ export interface AgentSession {
 }
 
 // Chatroom
-export type SenderType = 'user' | 'agent' | 'orchestrator' | 'system'
+export type SenderType = 'user' | 'agent' | 'orchestrator' | 'system' | 'event'
 
 export interface AgentMessage {
   id: number

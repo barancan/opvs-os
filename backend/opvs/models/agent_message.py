@@ -12,6 +12,7 @@ class SenderType(StrEnum):
     AGENT = "agent"
     ORCHESTRATOR = "orchestrator"
     SYSTEM = "system"
+    EVENT = "event"  # lightweight tool-status posts, rendered with reduced prominence
 
 
 class AgentMessage(Base):
