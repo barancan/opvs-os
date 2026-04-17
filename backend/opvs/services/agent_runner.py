@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -24,6 +24,12 @@ from opvs.models.agent_session import AgentSession, SessionStatus
 from opvs.schemas.agent_session import AgentSessionResponse
 
 logger = logging.getLogger(__name__)
+
+# Max recent chatroom messages injected into each agent's system prompt.
+# Keeps context focused; beyond ~20 messages the signal-to-noise ratio drops.
+CHATROOM_HISTORY_LIMIT = 20
+# Only messages younger than this window are considered "recent".
+CHATROOM_HISTORY_WINDOW_HOURS = 2
 
 # Running tasks: session_uuid → asyncio.Task
 _running_tasks: dict[str, asyncio.Task[None]] = {}
@@ -466,6 +472,30 @@ async def _run_session(
             _mention_queues.pop(session_uuid, None)
 
 
+def _relative_time(dt: datetime) -> str:
+    """Return a human-readable relative timestamp, e.g. '5m ago' or '2h ago'."""
+    aware = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+    delta = datetime.now(UTC) - aware
+    minutes = int(delta.total_seconds() / 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    return f"{hours // 24}d ago"
+
+
+def _format_chatroom_history(messages: list[AgentMessage]) -> str:
+    """Render a list of AgentMessages into a compact, readable block."""
+    lines = []
+    for msg in messages:
+        ts = _relative_time(msg.created_at)
+        lines.append(f"[{ts}] {msg.sender_name}: {msg.content}")
+    return "\n".join(lines)
+
+
 async def _build_agent_system_prompt(
     db: AsyncSession, session: AgentSession, project_id: int
 ) -> str:
@@ -473,6 +503,8 @@ async def _build_agent_system_prompt(
 
     from sqlalchemy import select as sa_select
 
+    from opvs.models.agent_message import AgentMessage as _AgentMessage
+    from opvs.models.agent_message import SenderType as _SenderType
     from opvs.models.project import Project
 
     workspace_path = await _get_workspace_path(db)
@@ -494,6 +526,26 @@ async def _build_agent_system_prompt(
     )
     stm = stm_path.read_text() if stm_path.exists() else ""
 
+    # Load recent chatroom activity, excluding system boilerplate messages.
+    cutoff = datetime.now(UTC) - timedelta(hours=CHATROOM_HISTORY_WINDOW_HOURS)
+    history_result = await db.execute(
+        sa_select(_AgentMessage)
+        .where(
+            _AgentMessage.project_id == project_id,
+            _AgentMessage.sender_type != _SenderType.SYSTEM,
+            _AgentMessage.created_at >= cutoff,
+        )
+        .order_by(_AgentMessage.created_at.desc())
+        .limit(CHATROOM_HISTORY_LIMIT)
+    )
+    recent_messages = list(reversed(history_result.scalars().all()))
+
+    chatroom_history_block = (
+        _format_chatroom_history(recent_messages)
+        if recent_messages
+        else "(No recent activity)"
+    )
+
     return f"""You are {session.persona_name}, an AI agent.
 
 ## Your instructions
@@ -510,6 +562,9 @@ Project: {project_name}
 
 ## Short-term memory
 {stm if stm and "No context" not in stm else "(No memory yet)"}
+
+## Recent chatroom activity (last {CHATROOM_HISTORY_WINDOW_HOURS}h, up to {CHATROOM_HISTORY_LIMIT} messages)
+{chatroom_history_block}
 
 ## Chatroom
 You are connected to the agent chatroom. Other agents and the user can see
