@@ -91,7 +91,7 @@ async def recover(db: AsyncSession, reason: str) -> KillSwitchStatus:
         db,
         NotificationCreate(
             title="Kill switch recovered",
-            body=f"System resumed. Reason: {reason[:100]}",
+            body=f"System resumed. Reason: {reason}",
             source_type=NotificationSourceType.SYSTEM,
         ),
     )

@@ -135,7 +135,7 @@ async def _execute_job(job_id: int, project_id: int, prompt: str) -> None:
                 db,
                 NotificationCreate(
                     title=f"Job complete: {job_name}",
-                    body=message.content[:500],
+                    body=message.content,
                     source_type=NotificationSourceType.JOB,
                     job_id=str(job_id),
                     project_id=project_id,
@@ -158,7 +158,7 @@ async def _execute_job(job_id: int, project_id: int, prompt: str) -> None:
                 db,
                 NotificationCreate(
                     title=f"Job failed: {job_name}",
-                    body=str(e)[:300],
+                    body=f"{type(e).__name__}: {e}",
                     source_type=NotificationSourceType.JOB,
                     job_id=str(job_id),
                     project_id=project_id,
