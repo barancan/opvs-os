@@ -237,6 +237,34 @@ export interface AgentMessage {
   created_at: string
 }
 
+// Workspace browser
+export interface WorkspaceNode {
+  path: string
+  name: string
+  type: 'file' | 'dir'
+  children?: WorkspaceNode[]
+}
+
+export interface WorkspaceTreeResponse {
+  nodes: WorkspaceNode[]
+}
+
+export interface WorkspaceFileResponse {
+  path: string
+  content: string
+}
+
+export interface WorkspaceFileSaveResponse {
+  path: string
+  saved: boolean
+}
+
+export interface WorkspaceIngestResponse {
+  imported: string[]
+  skipped: string[]
+  errors: string[]
+}
+
 // Skills
 export interface ProjectSkill {
   skill_id: string

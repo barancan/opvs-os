@@ -1129,11 +1129,32 @@ async def send_message(
                     tools_used.append(tool_name)
 
                     if tool_def.requires_approval:
+                        from opvs.models.tool_approval import ToolApprovalSource
+                        from opvs.services.approval_service import (
+                            create_approval,
+                            resolve_approval_db,
+                        )
+
                         request_id = str(uuid_lib.uuid4())
                         event = asyncio.Event()
                         _pending_approvals[request_id] = event
 
                         description = _describe_tool_action(tool_name, tool_input)
+
+                        # Persist before awaiting so a restart can expire it
+                        await create_approval(
+                            db,
+                            request_id=request_id,
+                            tool_name=tool_name,
+                            platform=skill.display_name,
+                            action=_tool_action_label(tool_name),
+                            description=description,
+                            parameters=tool_input,
+                            source=ToolApprovalSource.ORCHESTRATOR,
+                            project_id=project_id,
+                        )
+                        await db.flush()
+
                         await manager.send_to(
                             client_id,
                             WS_TOOL_APPROVAL_REQUIRED,
@@ -1152,6 +1173,10 @@ async def send_message(
 
                         approved = _approval_decisions.pop(request_id, False)
                         _pending_approvals.pop(request_id, None)
+
+                        # Update DB row to approved/rejected
+                        await resolve_approval_db(db, request_id, approved=approved)
+                        await db.flush()
 
                         if not approved:
                             await manager.send_to(

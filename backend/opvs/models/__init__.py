@@ -8,3 +8,4 @@ from opvs.models.project import ProjectLinearLink as ProjectLinearLink
 from opvs.models.project_skill import ProjectSkill as ProjectSkill
 from opvs.models.scheduled_job import ScheduledJob as ScheduledJob
 from opvs.models.settings import Setting as Setting
+from opvs.models.tool_approval import ToolApproval as ToolApproval
