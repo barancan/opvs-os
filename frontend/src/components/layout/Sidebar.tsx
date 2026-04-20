@@ -1,4 +1,4 @@
-import { BarChart2, Bot, Clock, FolderOpen, LayoutDashboard, Settings2 } from 'lucide-react'
+import { BarChart2, Bot, Brain, Clock, FolderOpen, LayoutDashboard, Settings2 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { ProjectSwitcher } from '@/components/layout/ProjectSwitcher'
 import { useAppStore } from '@/stores/useAppStore'
@@ -8,6 +8,7 @@ const navItems = [
   { label: 'Agents', path: '/agents', icon: Bot },
   { label: 'Jobs', path: '/jobs', icon: Clock },
   { label: 'Projects', path: '/projects', icon: FolderOpen },
+  { label: 'Brain', path: '/brain', icon: Brain },
   { label: 'Settings', path: '/settings', icon: Settings2 },
   { label: 'Analytics', path: '/analytics', icon: BarChart2 },
 ]

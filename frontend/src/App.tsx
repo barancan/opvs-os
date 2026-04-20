@@ -10,6 +10,7 @@ import { useAppStore } from '@/stores/useAppStore'
 import type { AgentMessage, SessionStatus, ToolApprovalRequest } from '@/types/api'
 import Agents from '@/pages/Agents'
 import Analytics from '@/pages/Analytics'
+import Brain from '@/pages/Brain'
 import Dashboard from '@/pages/Dashboard'
 import Jobs from '@/pages/Jobs'
 import Projects from '@/pages/Projects'
@@ -153,6 +154,7 @@ function AppInner() {
         <Route path="/agents" element={<Agents />} />
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/projects" element={<Projects />} />
+        <Route path="/brain" element={<Brain />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/analytics" element={<Analytics />} />
       </Route>

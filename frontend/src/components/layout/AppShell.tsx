@@ -4,7 +4,7 @@ import { Sidebar } from '@/components/layout/Sidebar'
 
 export function AppShell() {
   const location = useLocation()
-  const showChatroom = !['/settings', '/analytics'].includes(location.pathname)
+  const showChatroom = !['/settings', '/analytics', '/brain'].includes(location.pathname)
 
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950">
