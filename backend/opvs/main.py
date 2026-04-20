@@ -54,6 +54,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         for project in existing_projects:
             _create_project_workspace(wp, project.slug)
 
+        # Restart recovery: expire dangling approvals and fail interrupted sessions
+        from opvs.services.approval_service import (
+            expire_stale_approvals,
+            recover_interrupted_sessions,
+        )
+        await expire_stale_approvals(db)
+        await recover_interrupted_sessions(db)
+        await db.commit()
+
     await start_scheduler(app)
     yield
     stop_scheduler()

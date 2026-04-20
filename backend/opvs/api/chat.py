@@ -51,24 +51,80 @@ async def get_compact_status(
 
 
 @router.post("/approve/{request_id}")
-async def approve_tool_action(request_id: str) -> dict[str, str]:
-    """Approve a pending tool action. Unblocks the agentic loop."""
-    success = orchestrator_service.resolve_approval(request_id, approved=True)
-    if not success:
+async def approve_tool_action(
+    request_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """
+    Approve a pending tool action.
+
+    If the agentic loop is live, sets the in-memory event and unblocks it.
+    The DB row is updated regardless so state stays consistent.
+    Returns 409 if the approval has already been resolved or expired.
+    """
+    from opvs.models.tool_approval import ToolApprovalStatus
+    from opvs.services.approval_service import get_approval, resolve_approval_db
+
+    # Attempt to unblock the live loop first
+    live = orchestrator_service.resolve_approval(request_id, approved=True)
+
+    # Update DB row
+    row = await resolve_approval_db(db, request_id, approved=True)
+    if row is not None:
+        await db.commit()
+        return {"status": "approved", "request_id": request_id}
+
+    if live:
+        # Event was set but DB row either doesn't exist (legacy) or was already resolved
+        return {"status": "approved", "request_id": request_id}
+
+    # Neither in-memory nor pending in DB — check why
+    existing = await get_approval(db, request_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Unknown request_id: {request_id}")
+    if existing.status == ToolApprovalStatus.EXPIRED:
         raise HTTPException(
-            status_code=404,
-            detail=f"No pending approval found for request_id: {request_id}",
+            status_code=409,
+            detail="Approval expired: the session was interrupted or the request timed out",
         )
-    return {"status": "approved", "request_id": request_id}
+    raise HTTPException(
+        status_code=409,
+        detail=f"Approval already {existing.status.value}",
+    )
 
 
 @router.post("/reject/{request_id}")
-async def reject_tool_action(request_id: str) -> dict[str, str]:
-    """Reject a pending tool action. Agentic loop continues without executing."""
-    success = orchestrator_service.resolve_approval(request_id, approved=False)
-    if not success:
+async def reject_tool_action(
+    request_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """
+    Reject a pending tool action.
+
+    Mirrors the approve endpoint: updates the live loop and DB row.
+    """
+    from opvs.models.tool_approval import ToolApprovalStatus
+    from opvs.services.approval_service import get_approval, resolve_approval_db
+
+    live = orchestrator_service.resolve_approval(request_id, approved=False)
+
+    row = await resolve_approval_db(db, request_id, approved=False)
+    if row is not None:
+        await db.commit()
+        return {"status": "rejected", "request_id": request_id}
+
+    if live:
+        return {"status": "rejected", "request_id": request_id}
+
+    existing = await get_approval(db, request_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Unknown request_id: {request_id}")
+    if existing.status == ToolApprovalStatus.EXPIRED:
         raise HTTPException(
-            status_code=404,
-            detail=f"No pending approval found for request_id: {request_id}",
+            status_code=409,
+            detail="Approval expired: the session was interrupted or the request timed out",
         )
-    return {"status": "rejected", "request_id": request_id}
+    raise HTTPException(
+        status_code=409,
+        detail=f"Approval already {existing.status.value}",
+    )
