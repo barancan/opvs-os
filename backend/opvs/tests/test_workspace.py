@@ -20,6 +20,7 @@ Tests:
 
 import io
 import pathlib
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -32,7 +33,7 @@ from opvs.api import workspace as workspace_module
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _create_project(client: AsyncClient, name: str = "BrainTest") -> dict[str, object]:
+async def _create_project(client: AsyncClient, name: str = "BrainTest") -> Any:
     r = await client.post("/api/projects", json={"name": name})
     assert r.status_code == 201
     return dict(r.json())
